@@ -1,0 +1,23 @@
+# Environment variables & secrets (NUNCA comitar)
+.env
+*.env
+*.env.local
+
+# Banco de dados local de teste/simulação
+*.db
+*.sqlite3
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+

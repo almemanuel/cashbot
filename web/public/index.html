@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>CashBot — Crypto Portfolio</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0b0f19">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CashBot">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2310b981'/><text x='50%' y='65%' font-size='50' font-weight='bold' text-anchor='middle' fill='%23ffffff'>CB</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              dark: '#080c14',
+              card: '#0f172a',
+              cardHover: '#1e293b',
+              accent: '#10b981',
+              cyan: '#06b6d4',
+              gold: '#f59e0b',
+              danger: '#ef4444'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #080c14;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .glass-card {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glow-green {
+      box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.25);
+    }
+    .glow-cyan {
+      box-shadow: 0 0 25px -5px rgba(6, 182, 212, 0.2);
+    }
+    /* Estilização para visual nativo no celular */
+    @supports (-webkit-touch-callout: none) {
+      .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
+
+  <!-- TOPO / HEADER -->
+  <header class="sticky top-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-800/80 px-4 py-3">
+    <div class="max-w-2xl mx-auto flex items-center justify-between">
+      <div class="flex items-center space-x-2.5">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/30">
+          <i class="fa-solid fa-robot text-slate-950 font-bold text-base"></i>
+        </div>
+        <div>
+          <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-1.5">
+            CashBot
+            <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold">Zero-Cost AI</span>
+          </h1>
+          <p class="text-[11px] text-slate-400" id="headerStatus">Binance Spot Testnet</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-2">
+        <button id="btnNotifyPermission" onclick="requestNotificationPermission()" class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:text-white flex items-center gap-1.5 transition">
+          <i class="fa-regular fa-bell text-emerald-400"></i>
+          <span class="hidden sm:inline">Alertas</span>
+        </button>
+        <button onclick="refreshData()" class="p-2 rounded-lg bg-slate-800/90 text-slate-300 hover:text-white border border-slate-700/80 transition active:rotate-180">
+          <i class="fa-solid fa-arrows-rotate text-sm" id="refreshIcon"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- CONTEÚDO PRINCIPAL (MOBILE FIRST) -->
+  <main class="flex-1 max-w-2xl w-full mx-auto px-4 py-4 space-y-4 mb-20">
+
+    <!-- CARD DE DESTAQUE: POOL DE RETIRADA (PIX) & CAPITAL DE GIRO -->
+    <div class="glass-card rounded-2xl p-5 glow-green relative overflow-hidden">
+      <div class="absolute -top-12 -right-12 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+      
+      <div class="flex items-center justify-between text-xs text-slate-400 font-medium mb-1">
+        <span class="flex items-center gap-1.5">
+          <i class="fa-solid fa-piggy-bank text-emerald-400"></i>
+          POOL DE RETIRADA (LUCRO PROTEGIDO)
+        </span>
+        <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">SAQUE VIA PIX</span>
+      </div>
+
+      <div class="flex items-baseline space-x-2 mt-1">
+        <span class="text-3xl font-extrabold text-white tracking-tight" id="withdrawableUsd">$0.00</span>
+        <span class="text-xs text-emerald-400 font-semibold" id="withdrawableBrl">≈ R$ 0,00</span>
+      </div>
+      <p class="text-[11px] text-slate-400 mt-0.5">50% de cada trade lucrativo retido e blindado de risco.</p>
+
+      <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
+        <div>
+          <span class="text-slate-400 block text-[10px] uppercase font-semibold">Capital de Giro Ativo</span>
+          <span class="text-base font-bold text-slate-200" id="tradingBalanceUsd">$1,000.00</span>
+        </div>
+        <div class="text-right">
+          <span class="text-slate-400 block text-[10px] uppercase font-semibold">Total do Portfólio</span>
+          <span class="text-base font-bold text-emerald-400" id="totalPortfolioUsd">$1,000.00</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TABS DE NAVEGAÇÃO -->
+    <div class="flex bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
+      <button onclick="switchTab('dashboard')" id="tabBtn-dashboard" class="flex-1 py-2 rounded-lg bg-emerald-500 text-slate-950 font-bold transition">
+        <i class="fa-solid fa-chart-pie mr-1.5"></i> Visão Geral
+      </button>
+      <button onclick="switchTab('committee')" id="tabBtn-committee" class="flex-1 py-2 rounded-lg text-slate-400 hover:text-white transition">
+        <i class="fa-solid fa-brain mr-1.5"></i> Comitê IA
+      </button>
+      <button onclick="switchTab('trades')" id="tabBtn-trades" class="flex-1 py-2 rounded-lg text-slate-400 hover:text-white transition">
+        <i class="fa-solid fa-clock-rotate-left mr-1.5"></i> Histórico
+      </button>
+      <button onclick="switchTab('sim')" id="tabBtn-sim" class="flex-1 py-2 rounded-lg text-slate-400 hover:text-white transition">
+        <i class="fa-solid fa-flask mr-1.5"></i> Simulação
+      </button>
+    </div>
+
+    <!-- ABA 1: VISÃO GERAL (DASHBOARD) -->
+    <div id="tab-dashboard" class="space-y-4">
+      
+      <!-- POSIÇÃO ABERTA / STATUS DO ROBÔ -->
+      <div class="glass-card rounded-2xl p-4 glow-cyan border border-slate-800">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-crosshairs text-cyan-400"></i> Posição Aberta (OCO Ativa)
+          </h2>
+          <span id="badgeTradeStatus" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+            IDLE (Sem Posição)
+          </span>
+        </div>
+
+        <div id="openTradeContent">
+          <!-- Conteúdo gerado dinamicamente via JS -->
+        </div>
+      </div>
+
+      <!-- ÚLTIMO VEREDITO DO COMITÊ (RESUMO) -->
+      <div class="glass-card rounded-2xl p-4 border border-slate-800">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-shield-halved text-purple-400"></i> Último Consenso de IA
+          </h2>
+          <span id="lastConsensusSymbol" class="text-xs font-semibold text-slate-400">--</span>
+        </div>
+        <div id="lastConsensusCard" class="space-y-2">
+          <!-- Dinâmico -->
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ABA 2: COMITÊ DE IA -->
+    <div id="tab-committee" class="space-y-4 hidden">
+      <div class="glass-card rounded-2xl p-4 border border-slate-800">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3 flex items-center gap-2">
+          <i class="fa-solid fa-network-wired text-emerald-400"></i> Deliberações dos Agentes
+        </h2>
+        <div id="committeeLogsContainer" class="space-y-3">
+          <!-- Injetado dinamicamente -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ABA 3: HISTÓRICO DE TRADES -->
+    <div id="tab-trades" class="space-y-4 hidden">
+      <div class="glass-card rounded-2xl p-4 border border-slate-800">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 mb-3 flex items-center gap-2">
+          <i class="fa-solid fa-receipt text-cyan-400"></i> Histórico de Operações
+        </h2>
+        <div id="tradesHistoryContainer" class="space-y-2.5">
+          <!-- Injetado dinamicamente -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ABA 4: SIMULAÇÃO & NOTIFICAÇÕES -->
+    <div id="tab-sim" class="space-y-4 hidden">
+      <div class="glass-card rounded-2xl p-4 border border-slate-800">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 mb-1 flex items-center gap-2">
+          <i class="fa-solid fa-flask-vial text-emerald-400"></i> Central de Testes e Simulação
+        </h2>
+        <p class="text-xs text-slate-400 mb-4">
+          Dispare simulações pontuais para ver o robô analisar o mercado, emitir ordens e enviar notificações direto pro seu celular.
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <button onclick="triggerAction('/api/run-cycle', 'Executando Varredura Diária...')" class="py-3 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-95">
+            <i class="fa-solid fa-play text-emerald-400"></i>
+            1. Executar Varredura
+          </button>
+
+          <button onclick="triggerAction('/api/simulate-buy', 'Disparando Compra + OCO...')" class="py-3 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition active:scale-95">
+            <i class="fa-solid fa-cart-shopping"></i>
+            2. Forçar Compra Simulada
+          </button>
+
+          <button onclick="triggerAction('/api/simulate-tp', 'Simulando Take Profit...')" class="py-3 px-3 rounded-xl bg-teal-800 hover:bg-teal-700 text-teal-200 border border-teal-600/50 font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-95">
+            <i class="fa-solid fa-bullseye text-teal-300"></i>
+            3. Simular Fechar no TP (+Lucro)
+          </button>
+
+          <button onclick="triggerAction('/api/simulate-sl', 'Simulando Stop Loss...')" class="py-3 px-3 rounded-xl bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800/50 font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-95">
+            <i class="fa-solid fa-shield-xmark text-rose-400"></i>
+            4. Simular Stop Loss (SL)
+          </button>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-slate-800">
+          <button onclick="triggerAction('/api/test-notification', 'Enviando notificação de teste...')" class="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-cyan-600/20 transition active:scale-95">
+            <i class="fa-brands fa-telegram text-base"></i>
+            Disparar Teste no Telegram do Celular
+          </button>
+        </div>
+      </div>
+
+      <!-- CONFIGURAÇÃO RÁPIDA -->
+      <div class="glass-card rounded-2xl p-4 border border-slate-800">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 mb-2 flex items-center gap-2">
+          <i class="fa-solid fa-sliders text-cyan-400"></i> Notificações no Telegram (Gratuito)
+        </h2>
+        <p class="text-xs text-slate-400 mb-3">
+          Para apitar no seu celular a cada trade, crie um bot no Telegram com o <b>@BotFather</b> e insira aqui:
+        </p>
+        <div class="space-y-2.5">
+          <div>
+            <label class="text-[10px] text-slate-400 uppercase font-semibold">Telegram Bot Token</label>
+            <input type="text" id="cfgTelegramToken" placeholder="Ex: 123456789:ABCdefGhI..." class="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="text-[10px] text-slate-400 uppercase font-semibold">Telegram Chat ID</label>
+            <input type="text" id="cfgTelegramChatId" placeholder="Ex: 987654321" class="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500">
+          </div>
+          <button onclick="saveTelegramConfig()" class="w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition">
+            Salvar Chaves
+          </button>
+        </div>
+      </div>
+
+      <!-- INSTRUÇÃO PWA INSTALAÇÃO -->
+      <div class="glass-card rounded-2xl p-4 border border-emerald-500/20 bg-emerald-500/5">
+        <h3 class="text-xs font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
+          <i class="fa-solid fa-mobile-screen-button"></i> Como Usar Como App no Celular
+        </h3>
+        <p class="text-xs text-slate-300 leading-relaxed">
+          No navegador do seu smartphone (Chrome ou Safari), toque no menu de <b>Compartilhar / Mais Opções</b> e escolha <b>"Adicionar à Tela de Início"</b>. O CashBot será instalado como um app independente!
+        </p>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- TOAST DE NOTIFICAÇÃO FLUTUANTE -->
+  <div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-slate-900 border border-emerald-500/50 text-white text-xs font-medium shadow-2xl shadow-emerald-500/20 transition-all duration-300 opacity-0 pointer-events-none flex items-center gap-2">
+    <i class="fa-solid fa-circle-check text-emerald-400"></i>
+    <span id="toastMsg">Mensagem</span>
+  </div>
+
+  <!-- BOTTOM NAV BAR (ESTILO APP NATIVO) -->
+  <nav class="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/90 backdrop-blur-lg border-t border-slate-800/90 py-2 pb-safe px-6">
+    <div class="max-w-md mx-auto flex items-center justify-around text-slate-400 text-center">
+      <button onclick="switchTab('dashboard')" id="navBtn-dashboard" class="flex flex-col items-center gap-1 text-emerald-400 transition">
+        <i class="fa-solid fa-chart-simple text-lg"></i>
+        <span class="text-[10px] font-semibold">Portfólio</span>
+      </button>
+      <button onclick="switchTab('committee')" id="navBtn-committee" class="flex flex-col items-center gap-1 hover:text-white transition">
+        <i class="fa-solid fa-brain text-lg"></i>
+        <span class="text-[10px] font-semibold">Comitê IA</span>
+      </button>
+      <button onclick="switchTab('trades')" id="navBtn-trades" class="flex flex-col items-center gap-1 hover:text-white transition">
+        <i class="fa-solid fa-list-check text-lg"></i>
+        <span class="text-[10px] font-semibold">Trades</span>
+      </button>
+      <button onclick="switchTab('sim')" id="navBtn-sim" class="flex flex-col items-center gap-1 hover:text-white transition">
+        <i class="fa-solid fa-flask text-lg"></i>
+        <span class="text-[10px] font-semibold">Simulação</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- JAVASCRIPT DO APP -->
+  <script src="/app.js"></script>
+</body>
+</html>
+
