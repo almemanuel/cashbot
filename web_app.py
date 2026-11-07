@@ -216,7 +216,7 @@ class CashBotHandler(SimpleHTTPRequestHandler):
 
     def _handle_run_cycle(self, _payload: Dict[str, Any]) -> None:
         engine = TradingEngine(force_simulation=True)
-        engine.run_cycle(force_opportunity=False)
+        engine.run_cycle(force_opportunity=False, bypass_cooldown=True)
         self._send_json({"success": True, "message": "Varredura executada! Veja os logs na aba Comitê IA."})
 
     def _handle_simulate_buy(self, _payload: Dict[str, Any]) -> None:

@@ -241,8 +241,8 @@ function renderData(data) {
 
           <div class="grid grid-cols-3 gap-2 text-center text-xs py-2 bg-slate-950/60 rounded-xl border border-slate-800">
             <div>
-              <span class="text-[10px] text-rose-400 font-semibold block uppercase">Stop (-${slPct}%)</span>
-              <span class="font-bold text-rose-300">$${sl.toLocaleString()}</span>
+              <span class="text-[10px] text-cyan-400 font-semibold block uppercase">Proteção Spot</span>
+              <span class="font-bold text-cyan-300">Hold 0% Perda</span>
             </div>
             <div>
               <span class="text-[10px] text-slate-400 font-semibold block uppercase">Entrada</span>

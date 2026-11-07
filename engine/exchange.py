@@ -20,7 +20,12 @@ except ImportError:
     HAS_CCXT = False
 
 BINANCE_TESTNET_BASE = "https://testnet.binance.vision"
-BINANCE_PUBLIC_API = "https://api.binance.com/api/v3"
+BINANCE_PUBLIC_API = "https://data-api.binance.vision/api/v3"
+BINANCE_PUBLIC_ENDPOINTS = (
+    "https://data-api.binance.vision/api/v3",
+    "https://api.binance.com/api/v3",
+    "https://api1.binance.com/api/v3",
+)
 CORE_WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 SYNTHETIC_BASE_PRICES = {
     "BTC/USDT": 92000.0,
@@ -102,11 +107,19 @@ class ExchangeClient:
         return selected
 
     def _fetch_24h_tickers(self) -> List[Dict[str, Any]]:
+        for base_url in BINANCE_PUBLIC_ENDPOINTS:
+            tickers = self._try_fetch_24h_from_endpoint(base_url)
+            if tickers:
+                return tickers
+        return []
+
+    @staticmethod
+    def _try_fetch_24h_from_endpoint(base_url: str) -> List[Dict[str, Any]]:
         try:
-            resp = requests.get(f"{BINANCE_PUBLIC_API}/ticker/24hr", timeout=10)
+            resp = requests.get(f"{base_url}/ticker/24hr", timeout=10)
             return resp.json() if resp.status_code == 200 else []
         except Exception as e:
-            logger.warning(f"Scanner 24h indisponível, usando Core Watchlist: {e}")
+            logger.warning(f"Scanner 24h indisponível em {base_url}: {e}")
             return []
 
     def _is_eligible_usdt_ticker(self, ticker: Dict[str, Any]) -> bool:
@@ -152,13 +165,39 @@ class ExchangeClient:
 
     def _fetch_binance_klines(self, symbol: str, limit: int) -> List[Dict[str, float]]:
         clean_symbol = symbol.replace("/", "").upper()
-        url = f"{BINANCE_PUBLIC_API}/klines?symbol={clean_symbol}&interval=1d&limit={limit}"
+        for base_url in BINANCE_PUBLIC_ENDPOINTS:
+            candles = self._try_fetch_klines_from_endpoint(base_url, clean_symbol, limit)
+            if candles:
+                return candles
+        return []
+
+    def _try_fetch_klines_from_endpoint(self, base_url: str, clean_symbol: str, limit: int) -> List[Dict[str, float]]:
+        url = f"{base_url}/klines?symbol={clean_symbol}&interval=1d&limit={limit}"
         try:
             resp = requests.get(url, timeout=10)
             return self._parse_klines_response(resp)
         except Exception as e:
-            logger.warning(f"Falha ao consultar klines da Binance para {symbol}: {e}. Gerando candles de simulação.")
+            logger.warning(f"Falha ao consultar klines em {base_url} para {clean_symbol}: {e}")
             return []
+
+    def fetch_current_price(self, symbol: str, fallback_price: float) -> float:
+        """Consulta a cotação Spot em tempo real no espelho global da Binance (sem bloqueio de IP EUA)."""
+        clean_symbol = symbol.replace("/", "").upper()
+        for base_url in BINANCE_PUBLIC_ENDPOINTS:
+            price = self._try_fetch_spot_price(base_url, clean_symbol)
+            if price > 0:
+                return price
+        return fallback_price
+
+    @staticmethod
+    def _try_fetch_spot_price(base_url: str, clean_symbol: str) -> float:
+        try:
+            resp = requests.get(f"{base_url}/ticker/price?symbol={clean_symbol}", timeout=8)
+            if resp.status_code != 200:
+                return 0.0
+            return float(resp.json().get("price", 0.0))
+        except Exception:
+            return 0.0
 
     def _parse_klines_response(self, resp: requests.Response) -> List[Dict[str, float]]:
         if resp.status_code != 200:
@@ -225,7 +264,7 @@ class ExchangeClient:
         take_profit: float
     ) -> Dict[str, Any]:
         logger.info(f"[SIMULAÇÃO] Compra a mercado executada para {symbol}. Qtd: {quantity}")
-        logger.info(f"[SIMULAÇÃO] Ordem OCO armada: Stop Loss em ${stop_loss}, Take Profit em ${take_profit}")
+        logger.info(f"[MODO PERDA ZERO] Hold Spot ativo — Alvo de Lucro (Take Profit) em ${take_profit}")
         return {
             "order_list_id": int(time.time() * 1000),
             "status": "OPEN_OCO",
@@ -242,20 +281,14 @@ class ExchangeClient:
         market_order = self.exchange.create_market_buy_order(symbol, quantity)
         logger.info(f"Compra a mercado executada na Testnet: {market_order.get('id')}")
 
-        oco_params = {
-            "stopPrice": self.exchange.price_to_precision(symbol, stop_loss),
-            "stopLimitPrice": self.exchange.price_to_precision(symbol, stop_loss * 0.998),
-            "stopLimitTimeInForce": "GTC",
-        }
-        oco_order = self.exchange.create_order(
+        tp_order = self.exchange.create_order(
             symbol=symbol,
             type="limit",
             side="sell",
             amount=quantity,
             price=take_profit,
-            params=oco_params,
         )
-        order_list_id = oco_order.get("orderListId") or oco_order.get("id")
+        order_list_id = tp_order.get("orderListId") or tp_order.get("id")
         return {
             "order_list_id": order_list_id,
             "status": "OPEN_OCO",
@@ -271,11 +304,10 @@ class ExchangeClient:
         take_profit: float
     ) -> Dict[str, Any]:
         """
-        Verifica o estado da ordem OCO.
-        Retorna status: 'OPEN_OCO', 'CLOSED_TP', 'CLOSED_SL'.
+        Verifica se a posição atingiu o Take Profit.
+        Em Modo Perda Zero (Spot sem alavancagem), não vende em quedas (Hold até recuperar).
         """
-        candles = self.fetch_daily_candles(symbol, limit=1)
-        current_price = candles[-1]["close"] if candles else entry_price
+        current_price = self.fetch_current_price(symbol, fallback_price=entry_price)
 
         if self.simulation_mode or not self.exchange:
             return self._evaluate_price_triggers(current_price, stop_loss, take_profit)
@@ -285,9 +317,7 @@ class ExchangeClient:
     @staticmethod
     def _evaluate_price_triggers(current_price: float, stop_loss: float, take_profit: float) -> Dict[str, Any]:
         if current_price >= take_profit:
-            return {"status": "CLOSED_TP", "exit_price": take_profit}
-        if current_price <= stop_loss:
-            return {"status": "CLOSED_SL", "exit_price": stop_loss}
+            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit)}
         return {"status": "OPEN_OCO", "exit_price": None}
 
     def _check_live_oco_orders(
@@ -313,9 +343,6 @@ class ExchangeClient:
         stop_loss: float,
         take_profit: float
     ) -> Dict[str, Any]:
-        matching = [o for o in orders if str(o.get("orderListId", "")) == str(order_list_id)]
-        if matching:
-            return {"status": "OPEN_OCO", "exit_price": None}
         if current_price >= take_profit:
-            return {"status": "CLOSED_TP", "exit_price": take_profit}
-        return {"status": "CLOSED_SL", "exit_price": stop_loss}
+            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit)}
+        return {"status": "OPEN_OCO", "exit_price": None}

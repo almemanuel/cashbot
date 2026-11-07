@@ -46,7 +46,7 @@ class TradingEngine:
         self.risk_agent = RiskAgent()
         self.exchange = ExchangeClient(simulation_mode=force_simulation)
 
-    def run_cycle(self, force_opportunity: bool = False) -> None:
+    def run_cycle(self, force_opportunity: bool = False, bypass_cooldown: bool = False) -> None:
         """Executa um ciclo operacional completo conforme o SDD."""
         logger.info("=== INICIANDO CICLO OPERACIONAL DO CASHBOT ===")
         ledger = self.db.get_ledger()
@@ -65,7 +65,14 @@ class TradingEngine:
         if len(remaining_open) >= 3 or free_capital < 12.0:
             logger.info(
                 f"Carteira com {len(remaining_open)} posição(ões) ativa(s) e "
-                f"${free_capital:,.2f} livre. Aguardando encerramento de ordens para novas compras."
+                f"${free_capital:,.2f} livre. Monitoramento de Take Profit concluído."
+            )
+            return
+
+        if not (force_opportunity or bypass_cooldown) and self.db.has_recent_consensus(minutes=45):
+            logger.info(
+                "Take Profit checado em todas as posições. "
+                "Comitê de IA já deliberou nos últimos 45 min — poupando cota gratuita."
             )
             return
 
@@ -339,8 +346,9 @@ def main() -> None:
         _handle_test_notify()
         return
 
+    is_manual = os.getenv("GITHUB_EVENT_NAME", "") != "schedule"
     engine = TradingEngine(force_simulation=args.simulate)
-    engine.run_cycle(force_opportunity=args.force_buy)
+    engine.run_cycle(force_opportunity=args.force_buy, bypass_cooldown=is_manual)
 
 
 if __name__ == "__main__":

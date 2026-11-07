@@ -274,6 +274,27 @@ class Database:
         with self._session() as cur:
             return self._fetch_recent_consensus_in_cursor(cur, limit)
 
+    def has_recent_consensus(self, minutes: int = 45) -> bool:
+        """Verifica se o Comitê de IA já rodou recentemente para poupar cota em execuções de 15min."""
+        with self._session() as cur:
+            return self._check_recent_consensus_in_cursor(cur, minutes)
+
+    def _check_recent_consensus_in_cursor(self, cur, minutes: int) -> bool:
+        if self.is_postgres:
+            cur.execute(
+                "SELECT 1 FROM consensus_logs "
+                "WHERE created_at >= NOW() - (%s * INTERVAL '1 minute') LIMIT 1",
+                (int(minutes),),
+            )
+            return cur.fetchone() is not None
+
+        cur.execute(
+            "SELECT 1 FROM consensus_logs "
+            "WHERE created_at >= datetime('now', ?) LIMIT 1",
+            (f"-{int(minutes)} minutes",),
+        )
+        return cur.fetchone() is not None
+
     def get_dashboard_overview(self, trades_limit: int = 10, consensus_limit: int = 10) -> Dict[str, Any]:
         """
         Carrega todos os dados do painel em uma única conexão ao banco,

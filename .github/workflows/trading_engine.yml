@@ -2,8 +2,8 @@ name: CashBot Trading Engine
 
 on:
   schedule:
-    # Executa a cada 4 horas (6x por dia) para giro rápido de posições
-    - cron: '5 */4 * * *'
+    # Executa a cada 15 minutos (checa Take Profit sempre com custo zero; IA com cooldown inteligente)
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       force_simulation:

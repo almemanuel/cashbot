@@ -148,15 +148,15 @@ class TelegramNotifier:
         expected_profit = (tp_price - entry_price) * qty
         why_block = self._format_buy_reason_block(coin, tech_reason, sent_reason, ranking_lines)
         msg = (
-            f"{tag}🟢 <b>CashBot — Nova Compra de Giro Rápido!</b>\n\n"
+            f"{tag}🟢 <b>CashBot — Nova Compra (Modo Perda Zero)!</b>\n\n"
             f"🪙 <b>Moeda comprada:</b> {symbol}\n"
             f"💵 <b>Valor alocado:</b> US$ {total_invested:,.2f}\n"
             f"🏷️ <b>Preço de entrada:</b> US$ {entry_price:,.4f}\n\n"
-            f"🛡️ <b>Alvos dinâmicos definidos pela IA:</b>\n"
-            f"• 🎯 <b>Vender com Lucro em:</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.1f}%</b> 👉 lucro de <b>+US$ {expected_profit:,.2f}</b>)\n"
-            f"• 🛑 <b>Parar Perda em:</b> US$ {sl_price:,.4f} (<b>-{sl_pct:.1f}%</b>)\n\n"
+            f"🛡️ <b>Estratégia Ativa:</b>\n"
+            f"• 🎯 <b>Alvo de Venda (Lucro):</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.1f}%</b> 👉 lucro de <b>+US$ {expected_profit:,.2f}</b>)\n"
+            f"• 💎 <b>Proteção Contra Quedas:</b> Hold Spot (<b>Perda Zero</b> — não vende no prejuízo se oscilar para baixo)\n\n"
             f"{why_block}"
-            f"<i>Você não precisa fazer nada. O robô acompanha sozinho e te avisa quando vender!</i>"
+            f"<i>O robô checa o preço a cada 15 min e só vende quando bater a meta de lucro!</i>"
         )
         return self.send_message(msg)
 
