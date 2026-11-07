@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: cashbot-pwa
+    runtime: python
+    plan: free
+    buildCommand: pip install -r engine/requirements.txt
+    startCommand: python web_app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: BINANCE_TESTNET_API_KEY
+        sync: false
+      - key: BINANCE_TESTNET_SECRET_KEY
+        sync: false
+      - key: SIMULATION_MODE
+        value: "True"
+

@@ -2,8 +2,8 @@ name: CashBot Trading Engine
 
 on:
   schedule:
-    # 00:05 UTC = 21:05 Horário de Brasília (BRT)
-    - cron: '5 0 * * *'
+    # Executa a cada 4 horas (6x por dia) para giro rápido de posições
+    - cron: '5 */4 * * *'
   workflow_dispatch:
     inputs:
       force_simulation:
