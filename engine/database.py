@@ -322,14 +322,14 @@ class Database:
         if self.is_postgres:
             cur.execute(
                 "SELECT 1 FROM consensus_logs "
-                "WHERE created_at >= NOW() - (%s * INTERVAL '1 minute') LIMIT 1",
+                "WHERE symbol NOT LIKE 'SYSTEM/%%' AND created_at >= NOW() - (%s * INTERVAL '1 minute') LIMIT 1",
                 (int(minutes),),
             )
             return cur.fetchone() is not None
 
         cur.execute(
             "SELECT 1 FROM consensus_logs "
-            "WHERE created_at >= datetime('now', ?) LIMIT 1",
+            "WHERE symbol NOT LIKE 'SYSTEM/%' AND created_at >= datetime('now', ?) LIMIT 1",
             (f"-{int(minutes)} minutes",),
         )
         return cur.fetchone() is not None

@@ -54,6 +54,7 @@ jobs:
           WITHDRAW_WINDOW_START_BRT: ${{ secrets.WITHDRAW_WINDOW_START_BRT || '22' }}
           WITHDRAW_WINDOW_END_BRT: ${{ secrets.WITHDRAW_WINDOW_END_BRT || '23' }}
         run: |
+          curl -sS --max-time 10 https://cashbot-17wi.onrender.com/api/health || true
           FLAGS=""
           if [ "${{ github.event.inputs.force_buy }}" = "true" ]; then
             FLAGS="$FLAGS --force-buy"

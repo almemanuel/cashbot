@@ -61,6 +61,9 @@ class TradingEngine:
             return
 
         self._handle_daily_restart_if_due()
+        if self._is_duplicate_scheduled_cycle(force_opportunity, bypass_cooldown):
+            return
+
         ledger = self.db.get_ledger()
         logger.info(
             f"Saldos atuais -> Capital de Giro: ${ledger['trading_balance']:,.2f} | "
@@ -85,6 +88,14 @@ class TradingEngine:
             return
 
         self._decide_and_execute(deliberations, updated_ledger, remaining_open, notify_wait=bypass_cooldown)
+
+    def _is_duplicate_scheduled_cycle(self, force_opportunity: bool, bypass_cooldown: bool) -> bool:
+        if force_opportunity or bypass_cooldown:
+            return False
+        if not self.db.has_recent_consensus(minutes=12):
+            return False
+        logger.info("Ciclo automático já executado há menos de 12 min por outra instância. Pulando duplicata.")
+        return True
 
     def _handle_withdraw_pause_window(self, force_opportunity: bool) -> bool:
         """

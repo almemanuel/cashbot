@@ -10,11 +10,14 @@ import sys
 import hmac
 import hashlib
 import json
+import time
 import socket
 import logging
+import threading
 from typing import Dict, Any, Callable, List, Optional
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
+import requests
 
 from dotenv import load_dotenv
 
@@ -32,6 +35,60 @@ from agents.risk import RiskAgent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
 logger = logging.getLogger("cashbot.web")
+
+_CYCLE_LOCK = threading.Lock()
+DEFAULT_RENDER_URL = "https://cashbot-17wi.onrender.com"
+
+
+class BackgroundScheduler:
+    """
+    Agendador Nativo 24/7 em Background (15 em 15 minutos cravados + Auto Keep-Alive no Render).
+    Garante execução pontual mesmo quando o cron do GitHub Actions atrasa.
+    """
+
+    def __init__(self, interval_seconds: int = 900, keepalive_seconds: int = 600):
+        self.interval_seconds = interval_seconds
+        self.keepalive_seconds = keepalive_seconds
+        self.last_cycle_ts = 0.0
+        self.last_ping_ts = 0.0
+
+    def start(self) -> None:
+        thread = threading.Thread(target=self._run_loop, daemon=True, name="cashbot-15m-scheduler")
+        thread.start()
+        logger.info("Agendador nativo 15m + Auto Keep-Alive iniciado em background.")
+
+    def _run_loop(self) -> None:
+        time.sleep(10)
+        while True:
+            self._tick_keepalive()
+            self._tick_trading_cycle()
+            time.sleep(30)
+
+    def _tick_keepalive(self) -> None:
+        now = time.time()
+        if (now - self.last_ping_ts) < self.keepalive_seconds:
+            return
+        self.last_ping_ts = now
+        base_url = os.getenv("RENDER_EXTERNAL_URL", DEFAULT_RENDER_URL).rstrip("/")
+        try:
+            requests.get(f"{base_url}/api/health", timeout=8)
+        except Exception:
+            return
+
+    def _tick_trading_cycle(self) -> None:
+        now = time.time()
+        if (now - self.last_cycle_ts) < self.interval_seconds:
+            return
+        if not _CYCLE_LOCK.acquire(blocking=False):
+            return
+        try:
+            self.last_cycle_ts = time.time()
+            logger.info("[SCHEDULER 15M] Disparando ciclo pontual de Day Trade em background...")
+            TradingEngine().run_cycle(force_opportunity=False, bypass_cooldown=False)
+        except Exception as e:
+            logger.error(f"[SCHEDULER 15M] Erro durante ciclo automático: {e}")
+        finally:
+            _CYCLE_LOCK.release()
 
 
 def get_local_ip() -> str:
@@ -139,6 +196,9 @@ class CashBotHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/health":
+            self._send_json({"status": "ok", "ts": int(time.time())})
+            return
         if parsed.path == "/api/overview":
             self._handle_get_overview()
             return
@@ -218,9 +278,15 @@ class CashBotHandler(SimpleHTTPRequestHandler):
             return {}
 
     def _handle_run_cycle(self, _payload: Dict[str, Any]) -> None:
-        engine = TradingEngine(force_simulation=True)
-        engine.run_cycle(force_opportunity=False, bypass_cooldown=True)
-        self._send_json({"success": True, "message": "Varredura executada! Veja os logs na aba Comitê IA."})
+        if not _CYCLE_LOCK.acquire(blocking=False):
+            self._send_json({"success": True, "message": "Já existe uma varredura em andamento! Aguarde alguns segundos."})
+            return
+        try:
+            engine = TradingEngine()
+            engine.run_cycle(force_opportunity=False, bypass_cooldown=True)
+            self._send_json({"success": True, "message": "Varredura executada! Veja os logs na aba Comitê IA."})
+        finally:
+            _CYCLE_LOCK.release()
 
     def _handle_simulate_buy(self, _payload: Dict[str, Any]) -> None:
         db = Database()
@@ -352,6 +418,7 @@ def run_server(port: int = 8080) -> None:
     server_address = ("0.0.0.0", port)
     httpd = ThreadingHTTPServer(server_address, CashBotHandler)
     local_ip = get_local_ip()
+    BackgroundScheduler().start()
 
     print("\n" + "=" * 60)
     print("🚀 CashBot Web App & PWA Server Iniciado com Sucesso!")
