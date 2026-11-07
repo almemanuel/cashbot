@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 import argparse
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 
@@ -32,7 +33,10 @@ logger = logging.getLogger("cashbot.main")
 
 WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 MAX_DYNAMIC_PAIRS = 6
-MIN_SCORE_FOR_TRADE = 65.0
+MAX_OPEN_SLOTS = 4
+MIN_SCORE_FOR_TRADE = 63.0
+TACTICAL_PROFIT_MIN_PCT = 0.35
+TACTICAL_HOLD_MINUTES = 45.0
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
 
@@ -47,8 +51,8 @@ class TradingEngine:
         self.exchange = ExchangeClient(simulation_mode=force_simulation)
 
     def run_cycle(self, force_opportunity: bool = False, bypass_cooldown: bool = False) -> None:
-        """Executa um ciclo operacional completo conforme o SDD."""
-        logger.info("=== INICIANDO CICLO OPERACIONAL DO CASHBOT ===")
+        """Executa um ciclo completo de Day Trade Quantitativo (15m) com IA sempre ativa."""
+        logger.info("=== INICIANDO CICLO DAY TRADE QUANTITATIVO (15M) ===")
         ledger = self.db.get_ledger()
         logger.info(
             f"Saldos atuais -> Capital de Giro: ${ledger['trading_balance']:,.2f} | "
@@ -56,36 +60,34 @@ class TradingEngine:
         )
 
         open_trades = self.db.get_open_trades()
-        self._check_all_open_trades(open_trades)
+        deliberations = self._evaluate_watchlist(force_opportunity, open_trades)
+        self.db.save_consensus_logs_batch([d.to_dict() for d in deliberations])
+
+        self._check_all_open_trades(open_trades, deliberations)
 
         remaining_open = self.db.get_open_trades()
         updated_ledger = self._reconcile_exchange_cash_flow(self.db.get_ledger(), remaining_open)
         free_capital = self._compute_free_capital(updated_ledger, remaining_open)
 
-        if len(remaining_open) >= 3 or free_capital < 12.0:
+        if len(remaining_open) >= MAX_OPEN_SLOTS or free_capital < 12.0:
             logger.info(
-                f"Carteira com {len(remaining_open)} posição(ões) ativa(s) e "
-                f"${free_capital:,.2f} livre. Monitoramento de Take Profit concluído."
+                f"Carteira com {len(remaining_open)}/{MAX_OPEN_SLOTS} posições ativas e "
+                f"${free_capital:,.2f} livre. Comitê de IA registrado e posições monitoradas."
             )
             return
 
-        if not (force_opportunity or bypass_cooldown) and self.db.has_recent_consensus(minutes=45):
-            logger.info(
-                "Take Profit checado em todas as posições. "
-                "Comitê de IA já deliberou nos últimos 45 min — poupando cota gratuita."
-            )
-            return
+        self._decide_and_execute(deliberations, updated_ledger, remaining_open, notify_wait=bypass_cooldown)
 
-        deliberations = self._evaluate_watchlist(force_opportunity)
-        self.db.save_consensus_logs_batch([d.to_dict() for d in deliberations])
-
-        self._decide_and_execute(deliberations, updated_ledger, remaining_open)
-
-    def _check_all_open_trades(self, open_trades: List[Dict[str, Any]]) -> None:
-        """Verifica todas as ordens OCO abertas na carteira e encerra quantas tiverem atingido TP ou SL."""
+    def _check_all_open_trades(
+        self,
+        open_trades: List[Dict[str, Any]],
+        deliberations: List[Deliberation]
+    ) -> None:
+        """Avalia saída no Take Profit ou realização tática de lucro curto assistida por IA."""
+        delib_map = {d.symbol: d for d in deliberations}
         for trade in open_trades:
             current_ledger = self.db.get_ledger()
-            self._try_settle_open_trade(trade, current_ledger)
+            self._try_settle_open_trade(trade, current_ledger, delib_map.get(str(trade["symbol"])))
 
     def _reconcile_exchange_cash_flow(
         self,
@@ -133,25 +135,88 @@ class TradingEngine:
         locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
         return max(0.0, round(total_available - locked_usd, 2))
 
-    def _try_settle_open_trade(self, open_trade: Dict[str, Any], ledger: Dict[str, float]) -> bool:
+    def _try_settle_open_trade(
+        self,
+        open_trade: Dict[str, Any],
+        ledger: Dict[str, float],
+        delib: Optional[Deliberation] = None
+    ) -> bool:
         """
-        Verifica se a ordem OCO aberta já atingiu TP ou SL.
-        Retorna True se a posição foi encerrada (liberando nova varredura), ou False se segue aberta.
+        Verifica se a posição atingiu o Take Profit de Day Trade ou gatilho de Realização Tática no Lucro.
+        Em Modo Perda Zero, jamais encerra posição no prejuízo.
         """
-        logger.info(f"Trade ativo detectado: #{open_trade['id']} ({open_trade['symbol']}). Verificando status da OCO...")
+        entry_price = float(open_trade["entry_price"])
+        take_profit = self._ensure_daytrade_take_profit(open_trade, entry_price)
+
+        logger.info(f"Trade ativo #{open_trade['id']} ({open_trade['symbol']}): Entrada=${entry_price} | Alvo=${take_profit}")
         check = self.exchange.check_oco_status(
             symbol=open_trade["symbol"],
             order_list_id=open_trade["binance_order_list_id"],
-            entry_price=float(open_trade["entry_price"]),
+            entry_price=entry_price,
             stop_loss=float(open_trade["stop_loss"]),
-            take_profit=float(open_trade["take_profit"])
+            take_profit=take_profit
         )
         status = check["status"]
-        if status not in ("CLOSED_TP", "CLOSED_SL"):
+        current_price = float(check.get("current_price") or entry_price)
+
+        if status == "CLOSED_TP":
+            self._settle_closed_position(open_trade, "CLOSED_TP", float(check["exit_price"]), ledger)
+            return True
+
+        if self._should_lock_tactical_profit(open_trade, entry_price, current_price, delib):
+            logger.info(f"Realização Tática de Day Trade acionada para {open_trade['symbol']} a ${current_price}!")
+            self._settle_closed_position(open_trade, "CLOSED_TP", current_price, ledger)
+            return True
+
+        return False
+
+    def _ensure_daytrade_take_profit(self, open_trade: Dict[str, Any], entry_price: float) -> float:
+        current_tp = float(open_trade["take_profit"])
+        if entry_price <= 0:
+            return current_tp
+        tp_pct = ((current_tp - entry_price) / entry_price) * 100.0
+        if tp_pct <= 2.25:
+            return current_tp
+
+        new_tp = round(entry_price * 1.012, 6 if entry_price < 1.0 else 4)
+        self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
+        logger.info(
+            f"Alvo antigo de Swing Trade ({tp_pct:.1f}%) recalibrado para Day Trade (+1.2% -> ${new_tp}) "
+            f"em {open_trade['symbol']}."
+        )
+        return new_tp
+
+    def _should_lock_tactical_profit(
+        self,
+        open_trade: Dict[str, Any],
+        entry_price: float,
+        current_price: float,
+        delib: Optional[Deliberation]
+    ) -> bool:
+        if entry_price <= 0 or current_price <= entry_price:
+            return False
+        unrealized_pct = ((current_price - entry_price) / entry_price) * 100.0
+        if unrealized_pct < TACTICAL_PROFIT_MIN_PCT:
             return False
 
-        self._settle_closed_position(open_trade, status, float(check["exit_price"]), ledger)
-        return True
+        age_minutes = self._compute_trade_age_minutes(open_trade.get("created_at"))
+        ai_weakening = delib is not None and (delib.final_score < 58.0 or delib.indicators.rsi14 > 68.0)
+        return age_minutes >= TACTICAL_HOLD_MINUTES or ai_weakening
+
+    @staticmethod
+    def _compute_trade_age_minutes(created_at: Any) -> float:
+        if not created_at:
+            return 0.0
+        if isinstance(created_at, datetime):
+            dt = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds() / 60.0)
+        try:
+            raw = str(created_at).strip().replace(" ", "T")
+            iso = raw if ("+" in raw or raw.endswith("Z")) else f"{raw}+00:00"
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds() / 60.0)
+        except Exception:
+            return 0.0
 
     def _settle_closed_position(
         self,
@@ -189,11 +254,17 @@ class TradingEngine:
         )
         logger.info("Posição encerrada e notificada. Prosseguindo para nova varredura de mercado...")
 
-    def _evaluate_watchlist(self, force_opportunity: bool) -> List[Deliberation]:
-        """Descobre a Watchlist Dinâmica na Binance, pré-carrega notícias em lote e delibera."""
+    def _evaluate_watchlist(
+        self,
+        force_opportunity: bool,
+        open_trades: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Deliberation]:
+        """Descobre a Watchlist Dinâmica na Binance + ativos abertos, pré-carrega notícias e delibera."""
         dynamic_pairs = self.exchange.discover_dynamic_watchlist(max_pairs=MAX_DYNAMIC_PAIRS)
-        self.sent_agent.prefetch_market_context(dynamic_pairs)
-        return [self._deliberate_symbol(symbol, force_opportunity) for symbol in dynamic_pairs]
+        open_symbols = [str(t["symbol"]) for t in (open_trades or [])]
+        all_pairs = list(dict.fromkeys(dynamic_pairs + open_symbols))
+        self.sent_agent.prefetch_market_context(all_pairs)
+        return [self._deliberate_symbol(symbol, force_opportunity) for symbol in all_pairs]
 
     def _deliberate_symbol(self, symbol: str, force_opportunity: bool) -> Deliberation:
         logger.info(f"Analisando par {symbol}...")
@@ -247,7 +318,8 @@ class TradingEngine:
         self,
         deliberations: List[Deliberation],
         ledger: Dict[str, float],
-        open_trades: List[Dict[str, Any]]
+        open_trades: List[Dict[str, Any]],
+        notify_wait: bool = False
     ) -> None:
         open_symbols = {str(t["symbol"]) for t in open_trades}
         valid_candidates = [
@@ -255,7 +327,8 @@ class TradingEngine:
             if d.is_approved(MIN_SCORE_FOR_TRADE) and d.symbol not in open_symbols
         ]
         if not valid_candidates:
-            self._notify_no_opportunity(deliberations, ledger)
+            if notify_wait:
+                self._notify_no_opportunity(deliberations, ledger)
             return
 
         ranked_candidates = sorted(valid_candidates, key=lambda x: x.final_score, reverse=True)

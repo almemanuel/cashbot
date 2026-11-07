@@ -167,52 +167,72 @@ class TechnicalAgent:
     @staticmethod
     def _build_prompt(symbol: str, ind: TechnicalIndicators) -> str:
         return f"""
-Você é um Trader Quantitativo especialista em GIRO RÁPIDO (Short-Term Swing / Tiro Curto em Spot).
-O objetivo NÃO é segurar posição por semanas, e sim capturar lucros rápidos de curto prazo (+3% a +8%) com alta probabilidade de execução para gerar caixa rápido.
+Você é um Day Trader Quantitativo Institucional operando no Timeframe de 15 Minutos (Spot Modo Perda Zero).
+O objetivo é GIRO RÁPIDO INTRADAY (Scalp / Day Trade): capturar movimentos curtos e explosivos de +0.8% a +2.2% em minutos ou poucas horas, sem ficar preso em topos esticados.
 
-Analise os dados atuais de {symbol}:
-- Preço Atual: ${ind.current_price}
-- Máxima de 7 dias (Resistência curta): ${ind.recent_high_7d} (Espaço até o topo: +{ind.upside_to_7d_high_pct}%)
-- Mínima de 7 dias (Suporte curto): ${ind.recent_low_7d}
-- EMA 20: ${ind.ema20} | EMA 50: ${ind.ema50} | EMA 200: ${ind.ema200}
-- RSI 14: {ind.rsi14} | ATR 14: ${ind.atr14}
+Analise os dados quantitativos intradiários (15m) de {symbol}:
+- Preço Atual: ${ind.current_price} | VWAP Intradiário (24h): ${ind.vwap}
+- Bandas de Bollinger (20, 2): Superior ${ind.bb_upper} | Inferior ${ind.bb_lower}
+- Volume Ratio (Fluxo Institucional vs Média): {ind.volume_ratio}x | Momentum 1h: {ind.momentum_1h_pct:+0.2f}%
+- Máxima 24h: ${ind.recent_high_7d} (Espaço até topo: +{ind.upside_to_7d_high_pct}%) | Mínima 24h: ${ind.recent_low_7d}
+- EMA 20 (15m): ${ind.ema20} | EMA 50 (15m): ${ind.ema50} | EMA 200 (15m): ${ind.ema200}
+- RSI 14 (15m): {ind.rsi14} | ATR 14 (15m): ${ind.atr14}
 
-Critérios de avaliação para Giro Rápido:
-1. Priorize ativos com fôlego imediato para subir de +3.5% a +8.0% nos próximos 1 a 3 dias (repique de suporte com RSI entre 36 e 58, ou aceleração acima da EMA 20 com espaço até a máxima de 7d): nota 70 a 92.
-2. Defina `stop_loss_pct` (entre 1.5 e 4.2) posicionado de forma inteligente abaixo do suporte imediato.
-3. Defina `take_profit_pct` (entre 3.2 e 8.0, sendo pelo menos 1.5x o stop_loss_pct) em um nível realista que bata rápido (antes de travar na resistência).
-4. VETO (veto: true) se o ativo estiver esticado demais no topo (RSI > 80) ou em colapso sem suporte (RSI < 28).
+Técnicas de Day Trade Quantitativo a aplicar:
+1. GATILHO DE COMPRA DE ALTA PROBABILIDADE (Nota 68 a 94):
+   - Pullback na VWAP ou EMA 20 com retomada compradora (RSI entre 38 e 64), OU
+   - Reversão na Banda de Bollinger Inferior com defesa compradora, OU
+   - Breakout com Volume Institucional (`volume_ratio >= 1.2x`) e espaço livre até a Banda Superior.
+2. ALVO CURTO CIRÚRGICO (`take_profit_pct` entre `0.8` e `2.2`):
+   - Escolha um alvo curto e rápido (ex: `0.9%` a `1.8%`) posicionado antes da resistência imediata / Banda de Bollinger Superior para realizar lucro rápido no próximo ciclo de 15 minutos!
+3. VETO DE COMPRA DE TOPO (`veto: true` ou nota < 55):
+   - Jamais compre ativo já esticado acima da Banda de Bollinger Superior com RSI > 72 (exaustão de topo).
 
 Responda EXCLUSIVAMENTE em formato JSON com o seguinte schema:
 {{
   "score": <número float de 0 a 100>,
   "veto": <true ou false>,
-  "stop_loss_pct": <percentual de stop loss sugerido, ex: 2.5>,
-  "take_profit_pct": <percentual de alvo de lucro rápido sugerido, ex: 5.2>,
-  "reasoning": "<explicação direta em 1 ou 2 frases em português sobre o gatilho rápido e o alvo escolhido>"
+  "stop_loss_pct": <percentual técnico de referência entre 0.8 e 1.8>,
+  "take_profit_pct": <percentual de alvo curto de day trade entre 0.8 e 2.2, ex: 1.2>,
+  "reasoning": "<explicação analítica em 1 ou 2 frases em português citando VWAP/Bollinger/Volume/RSI e o alvo curto escolhido>"
 }}
 """
 
     def _heuristic_analysis(self, symbol: str, indicators: Dict[str, Any]) -> Dict[str, Any]:
-        """Motor heurístico de contingência sem else e com 1 nível de indentação."""
+        """Motor heurístico quantitativo de Day Trade sem else e com 1 nível de indentação."""
         ind = self._to_indicators_domain(indicators)
         reasons: List[str] = []
 
         trend_delta = self._evaluate_trend(ind, reasons)
         rsi_delta = self._evaluate_momentum(ind, reasons)
+        flow_delta = self._evaluate_order_flow(ind, reasons)
         veto = self._should_veto(ind, reasons)
 
-        raw_score = 50.0 + trend_delta + rsi_delta
+        raw_score = 50.0 + trend_delta + rsi_delta + flow_delta
         clamped_score = max(0.0, min(100.0, raw_score))
-        summary = " ".join(reasons) if reasons else "Indicadores em consolidação neutra."
+        summary = " ".join(reasons) if reasons else "Indicadores 15m em consolidação neutra."
 
         return AgentVerdict(
             score=round(clamped_score, 2),
             veto=veto,
             reasoning=summary,
-            stop_loss_pct=2.5,
-            take_profit_pct=min(7.5, max(4.2, ind.upside_to_7d_high_pct)),
+            stop_loss_pct=1.0,
+            take_profit_pct=min(1.8, max(0.9, round(ind.upside_to_7d_high_pct * 0.45, 2))),
         ).to_dict()
+
+    @staticmethod
+    def _evaluate_order_flow(ind: TechnicalIndicators, reasons: List[str]) -> float:
+        bonus = 0.0
+        if ind.is_above_vwap:
+            reasons.append("Preço sustentado acima da VWAP institucional.")
+            bonus += 6.0
+        if ind.is_volume_breakout:
+            reasons.append(f"Entrada de volume comprador ({ind.volume_ratio:.1f}x a média).")
+            bonus += 8.0
+        if ind.is_near_bb_lower_support:
+            reasons.append("Toque na Banda de Bollinger Inferior (desconto tático para repique).")
+            bonus += 8.0
+        return bonus
 
     @staticmethod
     def _evaluate_trend(ind: TechnicalIndicators, reasons: List[str]) -> float:
@@ -260,4 +280,9 @@ Responda EXCLUSIVAMENTE em formato JSON com o seguinte schema:
             atr14=float(indicators["atr14"]),
             recent_high_7d=float(indicators.get("recent_high_7d", indicators["current_price"])),
             recent_low_7d=float(indicators.get("recent_low_7d", indicators["current_price"])),
+            vwap=float(indicators.get("vwap", indicators["current_price"])),
+            bb_upper=float(indicators.get("bb_upper", 0.0)),
+            bb_lower=float(indicators.get("bb_lower", 0.0)),
+            volume_ratio=float(indicators.get("volume_ratio", 1.0)),
+            momentum_1h_pct=float(indicators.get("momentum_1h_pct", 0.0)),
         )

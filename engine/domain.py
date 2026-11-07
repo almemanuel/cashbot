@@ -40,6 +40,11 @@ class TechnicalIndicators(DictCompatibleMixin):
     atr14: float
     recent_high_7d: float = 0.0
     recent_low_7d: float = 0.0
+    vwap: float = 0.0
+    bb_upper: float = 0.0
+    bb_lower: float = 0.0
+    volume_ratio: float = 1.0
+    momentum_1h_pct: float = 0.0
 
     @property
     def is_strong_uptrend(self) -> bool:
@@ -54,21 +59,33 @@ class TechnicalIndicators(DictCompatibleMixin):
         return self.current_price < self.ema200
 
     @property
+    def is_above_vwap(self) -> bool:
+        return self.vwap <= 0 or self.current_price >= self.vwap
+
+    @property
+    def is_volume_breakout(self) -> bool:
+        return self.volume_ratio >= 1.25
+
+    @property
+    def is_near_bb_lower_support(self) -> bool:
+        return self.bb_lower > 0 and self.current_price <= (self.bb_lower * 1.012)
+
+    @property
     def is_healthy_momentum(self) -> bool:
-        return 45.0 <= self.rsi14 <= 68.0
+        return 42.0 <= self.rsi14 <= 66.0
 
     @property
     def is_overbought(self) -> bool:
-        return self.rsi14 > 78.0
+        return self.rsi14 > 75.0
 
     @property
     def is_oversold(self) -> bool:
-        return self.rsi14 < 32.0
+        return self.rsi14 < 30.0
 
     @property
     def upside_to_7d_high_pct(self) -> float:
         if self.current_price <= 0 or self.recent_high_7d <= self.current_price:
-            return 5.0
+            return 1.5
         return round(((self.recent_high_7d - self.current_price) / self.current_price) * 100.0, 2)
 
 

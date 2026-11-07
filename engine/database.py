@@ -217,6 +217,12 @@ class Database:
         with self._session() as cur:
             cur.execute(query, (exit_price, status, pnl_usd, now_str, trade_id))
 
+    def update_trade_take_profit(self, trade_id: int, new_take_profit: float) -> None:
+        """Recalibra o Take Profit de uma posição aberta para giro rápido de Day Trade."""
+        query = self._sql("UPDATE trades SET take_profit = ? WHERE id = ?")
+        with self._session() as cur:
+            cur.execute(query, (float(new_take_profit), int(trade_id)))
+
     def save_consensus_log(
         self,
         symbol: str,

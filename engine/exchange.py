@@ -172,12 +172,12 @@ class ExchangeClient:
         return []
 
     def _try_fetch_klines_from_endpoint(self, base_url: str, clean_symbol: str, limit: int) -> List[Dict[str, float]]:
-        url = f"{base_url}/klines?symbol={clean_symbol}&interval=1d&limit={limit}"
+        url = f"{base_url}/klines?symbol={clean_symbol}&interval=15m&limit={limit}"
         try:
             resp = requests.get(url, timeout=10)
             return self._parse_klines_response(resp)
         except Exception as e:
-            logger.warning(f"Falha ao consultar klines em {base_url} para {clean_symbol}: {e}")
+            logger.warning(f"Falha ao consultar klines 15m em {base_url} para {clean_symbol}: {e}")
             return []
 
     def fetch_current_price(self, symbol: str, fallback_price: float) -> float:
@@ -317,8 +317,8 @@ class ExchangeClient:
     @staticmethod
     def _evaluate_price_triggers(current_price: float, stop_loss: float, take_profit: float) -> Dict[str, Any]:
         if current_price >= take_profit:
-            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit)}
-        return {"status": "OPEN_OCO", "exit_price": None}
+            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit), "current_price": current_price}
+        return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
 
     def _check_live_oco_orders(
         self,
@@ -333,7 +333,7 @@ class ExchangeClient:
             return self._resolve_open_orders_state(orders, order_list_id, current_price, stop_loss, take_profit)
         except Exception as e:
             logger.error(f"Erro ao checar status OCO na Binance: {e}")
-            return {"status": "OPEN_OCO", "exit_price": None}
+            return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
 
     @staticmethod
     def _resolve_open_orders_state(
@@ -344,5 +344,5 @@ class ExchangeClient:
         take_profit: float
     ) -> Dict[str, Any]:
         if current_price >= take_profit:
-            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit)}
-        return {"status": "OPEN_OCO", "exit_price": None}
+            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit), "current_price": current_price}
+        return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}

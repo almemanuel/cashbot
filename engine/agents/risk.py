@@ -5,18 +5,19 @@ escolhidos pela IA para tiros curtos (giro rápido de caixa).
 Segue Object Calisthenics (1 nível de indentação por método, sem else).
 """
 
+import math
 from typing import List, Dict, Any, Tuple
 
-MIN_STOP_PCT = 1.5
-MAX_STOP_PCT = 4.5
-MIN_TP_PCT = 2.0
-MAX_TP_PCT = 5.5
-MIN_REWARD_RISK_RATIO = 1.2
+MIN_STOP_PCT = 0.8
+MAX_STOP_PCT = 2.0
+MIN_TP_PCT = 0.8
+MAX_TP_PCT = 2.2
+MIN_REWARD_RISK_RATIO = 1.0
 BINANCE_MIN_NOTIONAL_USD = 10.0
 SAFE_MIN_SLOT_USD = 12.0
-MAX_CONCURRENT_POSITIONS = 3
+MAX_CONCURRENT_POSITIONS = 4
 MIN_WITHDRAWABLE_USD = 10.0
-DEFAULT_CAPITAL_USAGE_PCT = 0.95
+DEFAULT_CAPITAL_USAGE_PCT = 0.96
 REINVEST_PROFIT_RATIO = 0.60
 WITHDRAW_PROFIT_RATIO = 0.40
 
@@ -94,7 +95,7 @@ class RiskAgent:
         self.base_capital_floor = base_capital_floor
 
     def compute_indicators(self, candles: List[Dict[str, float]]) -> Dict[str, Any]:
-        """Calcula EMAs (20, 50, 200), RSI (14), ATR (14) e Máxima/Mínima de 7 dias."""
+        """Calcula EMAs (20, 50, 200), RSI (14), ATR (14), VWAP, Bandas de Bollinger e Volume Ratio (15m)."""
         closes = [c["close"] for c in candles]
         current_price = closes[-1] if closes else 0.0
 
@@ -104,9 +105,13 @@ class RiskAgent:
         rsi14 = calculate_rsi(closes, 14)
         atr14 = calculate_atr(candles, 14)
 
-        recent_slice = candles[-7:] if len(candles) >= 7 else candles
+        recent_slice = candles[-96:] if len(candles) >= 96 else candles
         high_7d = max((c["high"] for c in recent_slice), default=current_price)
         low_7d = min((c["low"] for c in recent_slice), default=current_price)
+        vwap = self._calculate_vwap(recent_slice, current_price)
+        bb_upper, bb_lower = self._calculate_bollinger_bands(closes, current_price)
+        volume_ratio = self._calculate_volume_ratio(candles)
+        momentum_1h = self._calculate_momentum_1h(closes)
 
         return {
             "current_price": current_price,
@@ -117,7 +122,47 @@ class RiskAgent:
             "atr14": _round_price(atr14),
             "recent_high_7d": _round_price(high_7d),
             "recent_low_7d": _round_price(low_7d),
+            "vwap": _round_price(vwap),
+            "bb_upper": _round_price(bb_upper),
+            "bb_lower": _round_price(bb_lower),
+            "volume_ratio": round(volume_ratio, 2),
+            "momentum_1h_pct": round(momentum_1h, 2),
         }
+
+    @staticmethod
+    def _calculate_vwap(candles: List[Dict[str, float]], fallback: float) -> float:
+        total_vol = sum(c.get("volume", 0.0) for c in candles)
+        if total_vol <= 0:
+            return fallback
+        pv_sum = sum(((c["high"] + c["low"] + c["close"]) / 3.0) * c.get("volume", 0.0) for c in candles)
+        return pv_sum / total_vol
+
+    @staticmethod
+    def _calculate_bollinger_bands(closes: List[float], fallback: float, period: int = 20) -> Tuple[float, float]:
+        if len(closes) < period:
+            return fallback * 1.015, fallback * 0.985
+        window = closes[-period:]
+        mean = sum(window) / period
+        variance = sum((p - mean) ** 2 for p in window) / period
+        std_dev = math.sqrt(variance)
+        return mean + (2.0 * std_dev), max(0.0, mean - (2.0 * std_dev))
+
+    @staticmethod
+    def _calculate_volume_ratio(candles: List[Dict[str, float]], period: int = 20) -> float:
+        if len(candles) < period:
+            return 1.0
+        vols = [c.get("volume", 0.0) for c in candles[-period:]]
+        avg_vol = sum(vols) / period
+        if avg_vol <= 0:
+            return 1.0
+        recent_vol = max(vols[-1], vols[-2] if len(vols) >= 2 else vols[-1])
+        return recent_vol / avg_vol
+
+    @staticmethod
+    def _calculate_momentum_1h(closes: List[float]) -> float:
+        if len(closes) < 5 or closes[-5] <= 0:
+            return 0.0
+        return ((closes[-1] - closes[-5]) / closes[-5]) * 100.0
 
     def calculate_levels(
         self,

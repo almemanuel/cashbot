@@ -4,28 +4,30 @@ Sistema autônomo de **Giro Rápido no Mercado Spot (Modo Perda Zero)** com comi
 
 ---
 
-## ⚙️ Como o CashBot Funciona (Fluxo Operacional)
+## ⚙️ Como o CashBot Funciona (Motor Day Trade Quantitativo 15m)
 
-### 1. Monitoramento a Cada 15 Minutos (`*/15 * * * *`) — Custo Zero
+### 1. Ciclo de 15 em 15 Minutos com Comitê de IA Sempre Ativo (`*/15 * * * *`)
 O robô roda automaticamente na nuvem via **GitHub Actions** a cada **15 minutos** ([`.github/workflows/trading_engine.yml`](.github/workflows/trading_engine.yml)):
-* **Etapa 1 — Checagem de Lucro (A cada 15 min, 0 tokens de IA):** Consulta a cotação Spot ao vivo de todas as posições abertas através do espelho global da Binance (`https://data-api.binance.vision/api/v3`, imune a bloqueios regionais de IP nos EUA). Se alguma moeda bateu ou superou a meta de lucro (**Take Profit**), o robô realiza o lucro imediatamente, atualiza o banco e avisa no Telegram.
-* **Etapa 2 — Proteção Inteligente de Cota de IA:** Se todas as **3 vagas da carteira** já estiverem preenchidas (ou se o Comitê de IA já tiver deliberado nos últimos **45 minutos**), o ciclo encerra sem gastar chamadas gratuitas da Groq/Gemini e sem enviar mensagens repetidas no Telegram.
-* **Etapa 3 — Scanner Dinâmico da Binance:** Quando há capital e vaga livre na carteira, o robô faz 1 requisição global ao livro de 24h da Binance (`/ticker/24hr`) e seleciona até **6 ativos** combinando a *Core Watchlist* (`BTC/USDT`, `ETH/USDT`, `SOL/USDT`) com as moedas de maior liquidez (`> US$ 35M/24h`) e melhor impulso comprador do dia.
+* **Etapa 1 — Comitê de IA (Groq + Gemini) em Todo Ciclo:** A cada 15 minutos, o robô analisa a *Watchlist Dinâmica* (e todas as moedas que estiverem abertas na carteira) usando **velas intradiárias de 15 minutos (`15m`)**, gravando as deliberações no **Neon PostgreSQL** e atualizando o horário de **Última análise** no topo do painel.
+* **Etapa 2 — Realização Rápida de Lucro & Rotação Tática:**
+  * **Alvo Curto de Day Trade (`+0.8%` a `+2.2%`):** Se o preço atingir o *Take Profit* curto, realiza o lucro na hora.
+  * **Realização Tática no Lucro (`>= +0.35%`):** Se uma posição aberta já estiver no positivo (`>= +0.35%`) e passar de **45 minutos** aberta (ou a IA detectar enfraquecimento com nota `< 58` ou `RSI > 68`), o robô **embolsa esse lucro imediatamente** e libera a vaga para girar em uma moeda mais explosiva.
+* **Etapa 3 — Modo Perda Zero Absoluto (`Hold Spot`):** Se o preço oscilar abaixo da entrada, o robô **jamais vende no prejuízo** — ele segura o ativo no Spot até voltar ao campo positivo.
 
 ---
 
-### 2. Comitê Multi-Agente de IA (Descoberta Dinâmica de Modelos + Fallback)
-Para cada moeda da Watchlist Dinâmica, o motor executa:
+### 2. Indicadores Institucionais de Day Trade (Timeframe 15m)
+Para cada moeda, o motor calcula 250 velas de **15 minutos** e entrega ao Comitê de IA:
 1. **Agente Técnico (`engine/agents/technical.py` — Peso 60%):**
-   * Calcula indicadores reais com 250 candles diários: `EMA 20`, `EMA 50`, `EMA 200`, `RSI 14`, `ATR 14` e Suporte/Resistência de 7 dias.
-   * Consulta a API da **Groq** descobrindo dinamicamente os modelos ativos (ex: `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`) com fila de fallback automático.
-   * Define a nota técnica (`0–100`) e sugere o alvo curto de **Take Profit** (`+2.0%` a `+5.5%`) para giro rápido.
+   * **VWAP Intradiário (24h):** Preço Médio Ponderado por Volume usado por institucionais.
+   * **Bandas de Bollinger (20, 2):** Identifica recuos na banda inferior (compra descontada) e evita compras esticadas na banda superior.
+   * **Volume Spike Ratio & Momentum 1h:** Detecta entrada de fluxo comprador (*Smart Money*) acima da média.
+   * **EMAs (20, 50, 200), RSI 14 e ATR 14 no gráfico de 15m.**
 2. **Agente de Sentimento (`engine/agents/sentiment.py` — Peso 40%):**
-   * Faz *prefetch* em lote (sem gargalo N+1) do índice **Fear & Greed** e das manchetes reais de cada moeda via **CryptoCompare News API** + fallback **Google News RSS**.
-   * Consulta o **Google Gemini Flash** com descoberta automática dos modelos mais recentes e fallback em cascata.
-3. **Regra de Aprovação e Diversificação (`engine/agents/risk.py`):**
-   * Moedas com **Nota Final $\ge$ 65/100** e **sem Veto** são aprovadas.
-   * O capital livre é dividido proporcionalmente às notas em **até 3 posições simultâneas** (respeitando o lote mínimo seguro de `US$ 12.00` por posição).
+   * Faz *prefetch* em lote (sem gargalo N+1) do índice **Fear & Greed** e das manchetes reais via **CryptoCompare News API** + fallback **Google News RSS**.
+3. **Diversificação Ágil (`engine/agents/risk.py`):**
+   * Moedas com **Nota Final $\ge$ 63/100** e **sem Veto** são aprovadas.
+   * O capital livre é dividido proporcionalmente às notas em **até 4 posições simultâneas**, acelerando o giro intradiário.
 
 ---
 
