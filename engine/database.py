@@ -240,11 +240,11 @@ class Database:
         """
         query = self._sql(
             "SELECT pnl_usd FROM trades "
-            "WHERE status LIKE 'CLOSED_%' AND id >= 4 AND id != ? "
+            "WHERE status LIKE ? AND id >= 4 AND id != ? "
             "ORDER BY id ASC"
         )
         with self._session() as cur:
-            cur.execute(query, (int(exclude_trade_id),))
+            cur.execute(query, ("CLOSED_%", int(exclude_trade_id)))
             rows = cur.fetchall()
             return self._accumulate_drawdown_deficit(rows)
 
@@ -322,15 +322,15 @@ class Database:
         if self.is_postgres:
             cur.execute(
                 "SELECT 1 FROM consensus_logs "
-                "WHERE symbol NOT LIKE 'SYSTEM/%%' AND created_at >= NOW() - (%s * INTERVAL '1 minute') LIMIT 1",
-                (int(minutes),),
+                "WHERE symbol NOT LIKE %s AND created_at >= NOW() - (%s * INTERVAL '1 minute') LIMIT 1",
+                ("SYSTEM/%", int(minutes)),
             )
             return cur.fetchone() is not None
 
         cur.execute(
             "SELECT 1 FROM consensus_logs "
-            "WHERE symbol NOT LIKE 'SYSTEM/%' AND created_at >= datetime('now', ?) LIMIT 1",
-            (f"-{int(minutes)} minutes",),
+            "WHERE symbol NOT LIKE ? AND created_at >= datetime('now', ?) LIMIT 1",
+            ("SYSTEM/%", f"-{int(minutes)} minutes"),
         )
         return cur.fetchone() is not None
 
@@ -448,9 +448,9 @@ class Database:
 
     def _fetch_recent_consensus_in_cursor(self, cur, limit: int) -> List[Dict[str, Any]]:
         query = self._sql(
-            "SELECT * FROM consensus_logs WHERE symbol NOT LIKE 'SYSTEM/%' ORDER BY id DESC LIMIT ?"
+            "SELECT * FROM consensus_logs WHERE symbol NOT LIKE ? ORDER BY id DESC LIMIT ?"
         )
-        cur.execute(query, (int(limit),))
+        cur.execute(query, ("SYSTEM/%", int(limit)))
         return self._rows_to_dicts(cur, cur.fetchall())
 
     def _rows_to_dicts(self, cur, rows: List[Any]) -> List[Dict[str, Any]]:
