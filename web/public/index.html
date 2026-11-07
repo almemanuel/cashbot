@@ -178,18 +178,30 @@
     <!-- ABA 1: VISÃO GERAL (DASHBOARD) -->
     <div id="tab-dashboard" class="space-y-4">
 
-      <!-- GRÁFICO DE EVOLUÇÃO PATRIMONIAL -->
+      <!-- GRÁFICO 1: VALOR INVESTIDO & SAQUES -->
       <div class="glass-card rounded-2xl p-4 border border-slate-800">
         <div class="flex items-center justify-between mb-3">
           <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-            <i class="fa-solid fa-chart-line text-emerald-400"></i> Evolução do Capital, Lucro & Saques
+            <i class="fa-solid fa-coins text-cyan-400"></i> Valor Investido & Disponível p/ Saque
+          </h2>
+        </div>
+        <div class="relative h-44 w-full">
+          <canvas id="portfolioChart"></canvas>
+        </div>
+      </div>
+
+      <!-- GRÁFICO 2: EVOLUÇÃO DO LUCRO -->
+      <div class="glass-card rounded-2xl p-4 border border-slate-800">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-chart-line text-emerald-400"></i> Evolução do Lucro Realizado
           </h2>
           <span id="pnlSummaryBadge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             Lucro Acumulado: $0.00
           </span>
         </div>
-        <div class="relative h-52 w-full">
-          <canvas id="portfolioChart"></canvas>
+        <div class="relative h-40 w-full">
+          <canvas id="profitChart"></canvas>
         </div>
       </div>
       

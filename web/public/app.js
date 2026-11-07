@@ -10,6 +10,7 @@ if ('serviceWorker' in navigator) {
 let activeTab = 'dashboard';
 let overviewData = null;
 let portfolioChartInstance = null;
+let profitChartInstance = null;
 const AUTH_STORAGE_KEY = 'cashbot_auth_token';
 
 function getAuthToken() {
@@ -400,10 +401,23 @@ function computeInvestedAtTime(timeMs, allTrades) {
   }, 0);
 }
 
-// Renderiza Gráfico de Evolução Patrimonial (Chart.js)
+// Calcula lucro realizado acumulado até um determinado instante (ms)
+function computeProfitAtTime(timeMs, allTrades) {
+  if (!timeMs) return 0;
+  return allTrades
+    .filter(t => t.status === 'CLOSED_TP' || t.status === 'CLOSED_SL')
+    .reduce((acc, t) => {
+      const closeMs = parseDbTimeMs(t.closed_at || t.created_at);
+      if (closeMs > 0 && closeMs <= timeMs + 1000) {
+        return acc + Number(t.pnl_usd || 0);
+      }
+      return acc;
+    }, 0);
+}
+
+// Renderiza os 2 Gráficos Limpos: (1) Investido & Saque e (2) Lucro Acumulado
 function renderPortfolioChart(history, trades, openTrades, currentTrading, currentWithdraw, currentInvested) {
-  const canvas = document.getElementById('portfolioChart');
-  if (!canvas || typeof Chart === 'undefined') return;
+  if (typeof Chart === 'undefined') return;
 
   const realizedPnl = trades
     .filter(t => t.status === 'CLOSED_TP' || t.status === 'CLOSED_SL')
@@ -422,16 +436,16 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
     ? history.map(p => {
         const tMs = parseDbTimeMs(p.updated_at);
         return {
-          trading_balance: Number(p.trading_balance || 0),
           withdrawable_pool: Number(p.withdrawable_pool || 0),
           invested_usd: computeInvestedAtTime(tMs, trades),
+          profit_usd: computeProfitAtTime(tMs, trades),
           updated_at: p.updated_at,
         };
       })
     : [{
-        trading_balance: currentTrading,
         withdrawable_pool: currentWithdraw,
         invested_usd: currentInvested,
+        profit_usd: realizedPnl,
         updated_at: new Date().toISOString(),
       }];
 
@@ -441,9 +455,9 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
 
   const points = hasNewOpenInvestment
     ? [...basePoints, {
-        trading_balance: currentTrading,
         withdrawable_pool: currentWithdraw,
         invested_usd: currentInvested,
+        profit_usd: realizedPnl,
         updated_at: latestOpenTime,
       }]
     : basePoints;
@@ -452,77 +466,92 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
     const formatted = formatTimestampBr(p.updated_at);
     return formatted ? formatted.replace(/\/\d{4} às /, ' ') : `Pt ${idx + 1}`;
   });
-  const totalSeries = points.map(p => Number(p.trading_balance || 0) + Number(p.withdrawable_pool || 0));
   const investedSeries = points.map(p => Number(p.invested_usd || 0));
-  const freeTradingSeries = points.map(p => Math.max(0, Number(p.trading_balance || 0) - Number(p.invested_usd || 0)));
   const withdrawSeries = points.map(p => Number(p.withdrawable_pool || 0));
+  const profitSeries = points.map(p => Number(p.profit_usd || 0));
 
-  if (portfolioChartInstance) {
-    portfolioChartInstance.destroy();
+  const commonScales = {
+    x: {
+      ticks: { color: '#64748b', font: { size: 9 } },
+      grid: { color: 'rgba(255,255,255,0.04)' }
+    },
+    y: {
+      ticks: { color: '#94a3b8', font: { size: 10 }, callback: v => `$${v}` },
+      grid: { color: 'rgba(255,255,255,0.06)' }
+    }
+  };
+
+  // Gráfico 1: Valor Investido & Valor p/ Saque
+  const canvas1 = document.getElementById('portfolioChart');
+  if (canvas1) {
+    if (portfolioChartInstance) portfolioChartInstance.destroy();
+    portfolioChartInstance = new Chart(canvas1, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Valor Investido ($)',
+            data: investedSeries,
+            borderColor: '#06b6d4',
+            backgroundColor: 'rgba(6, 182, 212, 0.14)',
+            borderWidth: 2.5,
+            tension: 0.35,
+            fill: true,
+          },
+          {
+            label: 'Valor p/ Saque ($)',
+            data: withdrawSeries,
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.10)',
+            borderWidth: 2,
+            tension: 0.35,
+            fill: true,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 } }
+        },
+        scales: commonScales
+      }
+    });
   }
 
-  portfolioChartInstance = new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Capital Total ($)',
-          data: totalSeries,
-          borderColor: '#10b981',
-          backgroundColor: 'rgba(16, 185, 129, 0.10)',
-          borderWidth: 2.5,
-          tension: 0.35,
-          fill: true,
-        },
-        {
-          label: 'Valor Investido ($)',
-          data: investedSeries,
-          borderColor: '#a855f7',
-          backgroundColor: 'rgba(168, 85, 247, 0.14)',
-          borderWidth: 2,
-          tension: 0.35,
-          fill: true,
-        },
-        {
-          label: 'Caixa Livre ($)',
-          data: freeTradingSeries,
-          borderColor: '#06b6d4',
-          borderDash: [4, 4],
-          borderWidth: 2,
-          tension: 0.35,
-          fill: false,
-        },
-        {
-          label: 'Disponível p/ Saque ($)',
-          data: withdrawSeries,
-          borderColor: '#f59e0b',
-          borderWidth: 2,
-          tension: 0.35,
-          fill: false,
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 }
-        }
+  // Gráfico 2: Lucro Realizado Acumulado
+  const canvas2 = document.getElementById('profitChart');
+  if (canvas2) {
+    if (profitChartInstance) profitChartInstance.destroy();
+    const isPositive = realizedPnl >= 0;
+    profitChartInstance = new Chart(canvas2, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Lucro Acumulado ($)',
+            data: profitSeries,
+            borderColor: isPositive ? '#10b981' : '#f43f5e',
+            backgroundColor: isPositive ? 'rgba(16, 185, 129, 0.14)' : 'rgba(244, 63, 94, 0.14)',
+            borderWidth: 2.5,
+            tension: 0.35,
+            fill: true,
+          }
+        ]
       },
-      scales: {
-        x: {
-          ticks: { color: '#64748b', font: { size: 9 } },
-          grid: { color: 'rgba(255,255,255,0.04)' }
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 } }
         },
-        y: {
-          ticks: { color: '#94a3b8', font: { size: 10 }, callback: v => `$${v}` },
-          grid: { color: 'rgba(255,255,255,0.06)' }
-        }
+        scales: commonScales
       }
-    }
-  });
+    });
+  }
 }
 
 // Disparo de Ações
