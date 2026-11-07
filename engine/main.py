@@ -219,9 +219,8 @@ class TradingEngine:
             return
 
         ranked_candidates = sorted(valid_candidates, key=lambda x: x.final_score, reverse=True)
-        total_capital = self._reinvest_unwithdrawn_pool(ledger)
         locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
-        free_capital = max(0.0, round(total_capital - locked_usd, 2))
+        free_capital = self._sync_free_balance_before_orders(ledger, locked_usd)
 
         allocations = self.risk_agent.split_capital_for_candidates(
             free_balance=free_capital,
@@ -231,22 +230,24 @@ class TradingEngine:
         for candidate, allocated_usd in zip(ranked_candidates, allocations):
             self._open_position_for_candidate(candidate, deliberations, allocated_usd)
 
-    def _reinvest_unwithdrawn_pool(self, ledger: Dict[str, float]) -> float:
+    def _sync_free_balance_before_orders(self, ledger: Dict[str, float], locked_usd: float) -> float:
         """
-        Se o usuário não sacou o valor sugerido até a próxima oportunidade de compra,
-        reincorpora o saldo disponível ao Capital de Giro para maximizar os juros compostos.
+        Consulta o saldo livre real de USDT na Binance antes de emitir ordens:
+        - Se o usuário sacou na corretora (mesmo sem avisar no painel), usa apenas o saldo real que sobrou.
+        - Se o usuário não sacou o Pool de Saque, reincorpora o saldo disponível ao Capital de Giro (juros compostos).
         """
-        combined_ledger_usd = round(ledger["trading_balance"] + ledger["withdrawable_pool"], 2)
-        effective_usd = self.exchange.fetch_free_usdt_balance(combined_ledger_usd)
+        expected_free_usd = max(0.0, round(ledger["trading_balance"] + ledger["withdrawable_pool"] - locked_usd, 2))
+        actual_free_usd = round(self.exchange.fetch_free_usdt_balance(expected_free_usd), 2)
+        new_trading_total = round(locked_usd + actual_free_usd, 2)
 
-        if ledger["withdrawable_pool"] > 0:
+        if ledger["withdrawable_pool"] > 0 or abs(new_trading_total - ledger["trading_balance"]) > 0.01:
             logger.info(
-                f"Reinvestindo saldo não sacado (${ledger['withdrawable_pool']:,.2f}) "
-                f"no Capital de Giro -> Força Total: ${effective_usd:,.2f}"
+                f"Sincronizando saldo pré-ordem -> Livre: ${actual_free_usd:,.2f} | "
+                f"Investido: ${locked_usd:,.2f} | Capital de Giro Total: ${new_trading_total:,.2f}"
             )
-            self.db.update_ledger(effective_usd, 0.0)
+            self.db.update_ledger(new_trading_total, 0.0)
 
-        return effective_usd
+        return actual_free_usd
 
     def _notify_no_opportunity(self, deliberations: List[Deliberation], ledger: Dict[str, float]) -> None:
         logger.info(f"Nenhum par atingiu a pontuação mínima de {MIN_SCORE_FOR_TRADE} ou houve veto aplicado.")

@@ -41,7 +41,10 @@ Toda vez que uma posição fecha no lucro (`CLOSED_TP`), o `RiskAgent` aplica:
 2. **Divisão 60% Giro / 40% Saque com Trava Mínima de US$ 10:**
    * **60%** do lucro vai direto para o **Capital de Giro** (efeito bola de neve).
    * **40%** vai para o **Pool de Saque (Pix)**, desde que o acumulado atinja pelo menos **US$ 10.00** (mínimo da Binance). Enquanto for menor que US$ 10, 100% é reinvestido automaticamente no giro.
-3. **Reinvestimento Automático de Saque Não Utilizado:** Se o usuário não clicar em **"Já Saquei"** até a abertura de uma nova compra, o saldo parado no Pool de Saque é reincorporado ao Capital de Giro para maximizar os juros compostos.
+3. **Sincronização Automática de Saldo Antes das Ordens (`_sync_free_balance_before_orders`):**
+   * Antes de abrir qualquer nova posição, o robô consulta o **saldo livre real de USDT na Binance** (`fetch_free_usdt_balance`):
+   * **Se você sacou na corretora (mesmo sem avisar no painel):** O robô detecta automaticamente o saldo real menor na Binance e dimensiona as compras apenas com o que de fato está na conta.
+   * **Se você não sacou o valor sugerido:** O robô reincorpora automaticamente o saldo disponível ao Capital de Giro para maximizar os juros compostos (* o botão `"Já Saquei"` no painel serve apenas para quando você quiser simular uma retirada durante o Modo Simulação*).
 
 ---
 
