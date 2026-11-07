@@ -155,6 +155,17 @@ async function refreshData() {
   }
 }
 
+function formatTimestampBr(rawDateStr) {
+  if (!rawDateStr) return '';
+  const normalized = String(rawDateStr).trim().replace(' ', 'T');
+  const iso = /[Z+\-]\d{0,2}:?\d{0,2}$/.test(normalized) ? normalized : `${normalized}Z`;
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return String(rawDateStr).substring(0, 16);
+  const datePart = dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timePart = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return `${datePart} às ${timePart}`;
+}
+
 function renderData(data) {
   const ledger = data.ledger || { trading_balance: 1000, withdrawable_pool: 0 };
   const ledgerHistory = data.ledger_history || [];
@@ -165,6 +176,14 @@ function renderData(data) {
   const headerStatus = document.getElementById('headerStatus');
   if (headerStatus && data.db_mode) {
     headerStatus.innerText = `Binance Spot • ${data.db_mode}`;
+  }
+
+  const headerLastAnalysis = document.getElementById('headerLastAnalysis');
+  if (headerLastAnalysis) {
+    const latestTimestamp = logs.length > 0 ? formatTimestampBr(logs[0].created_at) : '';
+    headerLastAnalysis.innerHTML = latestTimestamp
+      ? `<i class="fa-regular fa-clock text-[9px]"></i> Última análise: <b>${latestTimestamp}</b>`
+      : `<i class="fa-regular fa-clock text-[9px]"></i> Última análise: Aguardando 1º ciclo`;
   }
 
   // 1. Ledger e Pool de Retirada
@@ -247,7 +266,7 @@ function renderData(data) {
   const lastSymbol = document.getElementById('lastConsensusSymbol');
   if (logs.length > 0) {
     const latest = logs[0];
-    lastSymbol.innerText = latest.symbol;
+    lastSymbol.innerText = `${latest.symbol} • ${formatTimestampBr(latest.created_at)}`;
     const finalScore = Number(latest.final_score);
     const techScore = Number(latest.technical_score);
     const sentScore = Number(latest.sentiment_score);
@@ -303,7 +322,7 @@ function renderData(data) {
           <div class="flex items-center gap-4 text-[11px] text-slate-400">
             <span>Groq: <b>${Number(l.technical_score).toFixed(1)}</b></span>
             <span>Gemini: <b>${Number(l.sentiment_score).toFixed(1)}</b></span>
-            <span class="text-[10px] text-slate-500 ml-auto">${(l.created_at || '').substring(0, 16)}</span>
+            <span class="text-[10px] text-slate-500 ml-auto">${formatTimestampBr(l.created_at)}</span>
           </div>
           <p class="text-[11px] text-slate-300 leading-snug">${l.reasoning_summary || ''}</p>
         </div>
@@ -372,8 +391,8 @@ function renderPortfolioChart(history, trades, currentTrading, currentWithdraw) 
     : [{ trading_balance: currentTrading, withdrawable_pool: currentWithdraw, updated_at: 'Agora' }];
 
   const labels = points.map((p, idx) => {
-    const raw = String(p.updated_at || '');
-    return raw.length >= 16 ? raw.substring(5, 16).replace('T', ' ') : `Pt ${idx + 1}`;
+    const formatted = formatTimestampBr(p.updated_at);
+    return formatted ? formatted.replace(/\/\d{4} às /, ' ') : `Pt ${idx + 1}`;
   });
   const totalSeries = points.map(p => Number(p.trading_balance || 0) + Number(p.withdrawable_pool || 0));
   const tradingSeries = points.map(p => Number(p.trading_balance || 0));
