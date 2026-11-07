@@ -51,6 +51,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SIMULATION_MODE: ${{ github.event.inputs.force_simulation || 'true' }}
+          WITHDRAW_WINDOW_START_BRT: ${{ secrets.WITHDRAW_WINDOW_START_BRT || '22' }}
+          WITHDRAW_WINDOW_END_BRT: ${{ secrets.WITHDRAW_WINDOW_END_BRT || '23' }}
         run: |
           FLAGS=""
           if [ "${{ github.event.inputs.force_buy }}" = "true" ]; then
