@@ -31,8 +31,11 @@ Para cada moeda, o motor calcula 250 velas de **15 minutos** e entrega ao Comit�
 
 ---
 
-### 3. Modo "Perda Zero" no Spot + Surfando Tendência de Alta (`Trailing Take Profit`)
-* **Sem Venda em Pânico na Queda:** Como opera no **Mercado Spot (sem alavancagem)**, se o preço recuar após a compra, o robô **não realiza prejuízo no fundo** — mantém em *Hold* até voltar ao lucro.
+### 3. Proteção Anti-Ruído, Disjuntor de Catástrofe (`-7.5%`), Stop Temporal (`48h`) e Modo Recuperação 100%
+* **Imune a Ruído Curto (Sem Stop Curto):** Oscilações normais de mercado (`-1%` a `-7%`) não derrubam a posição; o robô aguarda a retomada sem realizar prejuízo bobo.
+* **Disjuntor de Catástrofe (`-7.5%`):** Mantém uma trava de emergência para proteger a banca contra colapsos severos (evitando que uma moeda derreta `-40%` ou `-80%`).
+* **Stop Temporal Inteligente (`48h`):** Se uma operação completar **48 horas** estagnada (andando de lado ou com recuo leve de até `-2.0%` e sem força compradora na IA), o robô encerra para destravar o capital e girar em moedas melhores.
+* **Modo Recuperação 100% do Capital (*High-Water Mark*):** Se o Disjuntor ou o Stop Temporal gerar qualquer perda, o robô entra automaticamente em **Modo Recuperação**: **100% dos próximos lucros** voltam direto para o **Capital de Giro** (zero separação para saque) até que 100% do capital original esteja recomposto!
 * **Análise de Continuidade no Ponto de Venda (`_should_ride_strong_uptrend`):** Mesmo quando a moeda bate no ponto de venda, antes de encerrar a operação o robô verifica se a tendência de alta continua forte (`Score IA >= 68`, `Preço > EMA20 > EMA50`, acima da `VWAP` e `RSI < 68` sem exaustão). Se ainda houver força compradora, ele **segura a venda por mais rodadas** e sobe o alvo (`Take Profit`) em **`+0.8%`** para capturar toda a pernada de alta!
 
 ---

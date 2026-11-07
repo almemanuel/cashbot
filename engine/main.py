@@ -37,6 +37,9 @@ MAX_OPEN_SLOTS = 4
 MIN_SCORE_FOR_TRADE = 63.0
 TACTICAL_PROFIT_MIN_PCT = 0.35
 TACTICAL_HOLD_MINUTES = 45.0
+CATASTROPHE_STOP_PCT = 7.5
+TIME_STOP_MINUTES = 48.0 * 60.0
+TIME_STOP_MAX_LOSS_PCT = 2.0
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
 
@@ -232,18 +235,25 @@ class TradingEngine:
         delib: Optional[Deliberation] = None
     ) -> bool:
         """
-        Verifica se a posição atingiu o Take Profit ou gatilho de Realização Tática no Lucro.
-        Mesmo ao bater no ponto de venda, avalia se a tendência de alta segue forte para surfar mais rodadas!
+        Avalia 4 gatilhos inteligentes de saída:
+        1. Take Profit curto (+0.8% a +2.2%) com análise de continuidade de alta (Trailing TP).
+        2. Realização Tática no Lucro (>= +0.35% após 45min ou enfraquecimento).
+        3. Disjuntor de Catástrofe (-7.5%) para evitar colapsos profundos sem cair em ruído curto.
+        4. Stop Temporal Inteligente (48h estagnado em faixa estreita para destravar capital).
         """
         entry_price = float(open_trade["entry_price"])
         take_profit = self._ensure_daytrade_take_profit(open_trade, entry_price)
+        stop_loss = self._ensure_catastrophe_stop_loss(open_trade, entry_price)
 
-        logger.info(f"Trade ativo #{open_trade['id']} ({open_trade['symbol']}): Entrada=${entry_price} | Alvo=${take_profit}")
+        logger.info(
+            f"Trade ativo #{open_trade['id']} ({open_trade['symbol']}): "
+            f"Entrada=${entry_price} | Alvo=${take_profit} | Disjuntor=${stop_loss}"
+        )
         check = self.exchange.check_oco_status(
             symbol=open_trade["symbol"],
             order_list_id=open_trade["binance_order_list_id"],
             entry_price=entry_price,
-            stop_loss=float(open_trade["stop_loss"]),
+            stop_loss=stop_loss,
             take_profit=take_profit
         )
         status = check["status"]
@@ -252,14 +262,25 @@ class TradingEngine:
         if status == "CLOSED_TP":
             if self._should_ride_strong_uptrend(open_trade, current_price, delib):
                 return False
-            self._settle_closed_position(open_trade, "CLOSED_TP", float(check["exit_price"]), ledger)
+            self._settle_closed_position(open_trade, "CLOSED_TP", float(check["exit_price"]), ledger, "TP")
+            return True
+
+        if status == "CLOSED_SL":
+            logger.warning(f"Disjuntor de Catástrofe (-7.5%) acionado em {open_trade['symbol']} a ${current_price}!")
+            self._settle_closed_position(open_trade, "CLOSED_SL", current_price, ledger, "CATASTROPHE_SL")
             return True
 
         if self._should_lock_tactical_profit(open_trade, entry_price, current_price, delib):
             if self._should_ride_strong_uptrend(open_trade, current_price, delib):
                 return False
             logger.info(f"Realização Tática de Day Trade acionada para {open_trade['symbol']} a ${current_price}!")
-            self._settle_closed_position(open_trade, "CLOSED_TP", current_price, ledger)
+            self._settle_closed_position(open_trade, "CLOSED_TP", current_price, ledger, "TP")
+            return True
+
+        if self._should_trigger_time_stop(open_trade, entry_price, current_price, delib):
+            close_status = "CLOSED_TP" if current_price >= entry_price else "CLOSED_SL"
+            logger.info(f"Stop Temporal (48h sem evolução) acionado para {open_trade['symbol']} a ${current_price}!")
+            self._settle_closed_position(open_trade, close_status, current_price, ledger, "TIME_STOP")
             return True
 
         return False
@@ -305,6 +326,22 @@ class TradingEngine:
         )
         return new_tp
 
+    def _ensure_catastrophe_stop_loss(self, open_trade: Dict[str, Any], entry_price: float) -> float:
+        current_sl = float(open_trade["stop_loss"])
+        if entry_price <= 0:
+            return current_sl
+        sl_pct = ((entry_price - current_sl) / entry_price) * 100.0
+        if 7.0 <= sl_pct <= 8.5:
+            return current_sl
+
+        new_sl = round(entry_price * (1.0 - (CATASTROPHE_STOP_PCT / 100.0)), 6 if entry_price < 1.0 else 4)
+        self.db.update_trade_stop_loss(int(open_trade["id"]), new_sl)
+        logger.info(
+            f"Stop antigo ({sl_pct:.1f}%) recalibrado para Disjuntor de Catástrofe (-{CATASTROPHE_STOP_PCT}% -> ${new_sl}) "
+            f"em {open_trade['symbol']}."
+        )
+        return new_sl
+
     def _should_lock_tactical_profit(
         self,
         open_trade: Dict[str, Any],
@@ -321,6 +358,30 @@ class TradingEngine:
         age_minutes = self._compute_trade_age_minutes(open_trade.get("created_at"))
         ai_weakening = delib is not None and (delib.final_score < 58.0 or delib.indicators.rsi14 > 68.0)
         return age_minutes >= TACTICAL_HOLD_MINUTES or ai_weakening
+
+    def _should_trigger_time_stop(
+        self,
+        open_trade: Dict[str, Any],
+        entry_price: float,
+        current_price: float,
+        delib: Optional[Deliberation]
+    ) -> bool:
+        """
+        Stop Temporal Inteligente: se a operação completou 48h sem engatar e está apenas
+        andando de lado ou com recuo leve (até -2.0%) sem força compradora na IA,
+        encerra para destravar o capital e girar em oportunidades melhores.
+        """
+        if entry_price <= 0:
+            return False
+        age_minutes = self._compute_trade_age_minutes(open_trade.get("created_at"))
+        if age_minutes < TIME_STOP_MINUTES:
+            return False
+
+        unrealized_pct = ((current_price - entry_price) / entry_price) * 100.0
+        if unrealized_pct < -TIME_STOP_MAX_LOSS_PCT or unrealized_pct >= TACTICAL_PROFIT_MIN_PCT:
+            return False
+
+        return delib is None or delib.final_score < 62.0
 
     @staticmethod
     def _compute_trade_age_minutes(created_at: Any) -> float:
@@ -342,31 +403,34 @@ class TradingEngine:
         open_trade: Dict[str, Any],
         status: str,
         exit_price: float,
-        ledger: Dict[str, float]
+        ledger: Dict[str, float],
+        outcome_reason: str = "TP"
     ) -> None:
         entry_price = float(open_trade["entry_price"])
         qty = float(open_trade["quantity"])
         pnl_usd = (exit_price - entry_price) * qty
         prev_total = round(float(ledger["trading_balance"]) + float(ledger["withdrawable_pool"]), 2)
+        unrecovered_before = self.db.get_unrecovered_loss_usd()
 
-        logger.info(f"Posição fechada com status {status}! PnL: ${pnl_usd:+,.2f}")
+        logger.info(f"Posição fechada com status {status} ({outcome_reason})! PnL: ${pnl_usd:+,.2f}")
         self.db.close_trade(open_trade["id"], exit_price, status, pnl_usd)
 
         new_trading, new_pool, to_withdraw, to_reinvest = self.risk_agent.allocate_trade_pnl(
             trading_balance=ledger["trading_balance"],
             withdrawable_pool=ledger["withdrawable_pool"],
             pnl_usd=pnl_usd,
+            unrecovered_loss_usd=unrecovered_before,
         )
         self.db.update_ledger(new_trading, new_pool)
         remaining_open = self.db.get_open_trades()
         invested_usd = round(sum(float(t["entry_price"]) * float(t["quantity"]) for t in remaining_open), 2)
         free_cash = max(0.0, round(new_trading - invested_usd, 2))
         current_total = round(new_trading + new_pool, 2)
+        unrecovered_after = self.db.get_unrecovered_loss_usd()
 
-        outcome = "TP" if status == "CLOSED_TP" else "SL"
         self.notifier.notify_order_closed(
             symbol=open_trade["symbol"],
-            outcome=outcome,
+            outcome=outcome_reason,
             entry_price=entry_price,
             exit_price=exit_price,
             pnl_usd=pnl_usd,
@@ -379,6 +443,7 @@ class TradingEngine:
             current_portfolio_total=current_total,
             invested_total=invested_usd,
             free_cash=free_cash,
+            unrecovered_loss_usd=unrecovered_after,
         )
         logger.info("Posição encerrada e notificada. Prosseguindo para nova varredura de mercado...")
 

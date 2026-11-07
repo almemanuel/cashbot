@@ -223,6 +223,35 @@ class Database:
         with self._session() as cur:
             cur.execute(query, (float(new_take_profit), int(trade_id)))
 
+    def update_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
+        """Recalibra o Stop Loss de Catástrofe (-7.5%) de uma posição aberta."""
+        query = self._sql("UPDATE trades SET stop_loss = ? WHERE id = ?")
+        with self._session() as cur:
+            cur.execute(query, (float(new_stop_loss), int(trade_id)))
+
+    def get_unrecovered_loss_usd(self, exclude_trade_id: int = 0) -> float:
+        """
+        Calcula o saldo de prejuízo acumulado ainda não recuperado pelos lucros subsequentes
+        (High-Water Mark das operações fechadas no ciclo atual, id >= 4).
+        """
+        query = self._sql(
+            "SELECT pnl_usd FROM trades "
+            "WHERE status LIKE 'CLOSED_%' AND id >= 4 AND id != ? "
+            "ORDER BY id ASC"
+        )
+        with self._session() as cur:
+            cur.execute(query, (int(exclude_trade_id),))
+            rows = cur.fetchall()
+            return self._accumulate_drawdown_deficit(rows)
+
+    @staticmethod
+    def _accumulate_drawdown_deficit(rows: List[Any]) -> float:
+        deficit = 0.0
+        for row in rows:
+            pnl = float(row[0] or 0.0)
+            deficit = max(0.0, round(deficit - pnl, 2))
+        return deficit
+
     def save_consensus_log(
         self,
         symbol: str,
@@ -350,14 +379,20 @@ class Database:
 
             return {
                 "start_total": start_total,
+                "start_of_day_total": start_total,
                 "current_total": current_total,
+                "end_of_day_total": current_total,
                 "trading_balance": round(float(ledger["trading_balance"]), 2),
                 "withdrawable_pool": round(float(ledger["withdrawable_pool"]), 2),
                 "invested_usd": round(invested_usd, 2),
                 "free_cash": free_cash,
+                "free_cash_usd": free_cash,
                 "open_count": len(open_trades),
+                "open_trades_count": len(open_trades),
                 "closed_count": len(closed_trades),
+                "closed_today_count": len(closed_trades),
                 "today_pnl": today_pnl,
+                "day_profit_usd": today_pnl,
             }
 
     def get_dashboard_overview(self, trades_limit: int = 10, consensus_limit: int = 10) -> Dict[str, Any]:

@@ -8,11 +8,12 @@ Segue Object Calisthenics (1 nível de indentação por método, sem else).
 import math
 from typing import List, Dict, Any, Tuple
 
-MIN_STOP_PCT = 0.8
-MAX_STOP_PCT = 2.0
+CATASTROPHE_STOP_PCT = 7.5
+MIN_STOP_PCT = 7.0
+MAX_STOP_PCT = 8.0
 MIN_TP_PCT = 0.8
 MAX_TP_PCT = 2.2
-MIN_REWARD_RISK_RATIO = 1.0
+DEFAULT_TP_PCT = 1.2
 BINANCE_MIN_NOTIONAL_USD = 10.0
 SAFE_MIN_SLOT_USD = 12.0
 MAX_CONCURRENT_POSITIONS = 4
@@ -172,8 +173,8 @@ class RiskAgent:
         ai_tp_pct: float = 0.0
     ) -> Tuple[float, float, float]:
         """
-        Define Stop Loss e Take Profit de giro rápido combinando a escolha da IA
-        com guardrails de segurança (Stop entre 1.5% e 4.5%; Alvo entre 3.0% e 8.5%).
+        Define o Disjuntor de Catástrofe (-7.5%) para evitar ruído curto mas proteger a banca
+        contra colapsos severos, mantendo o Take Profit curto de Day Trade (+0.8% a +2.2%).
         Retorna (stop_loss, take_profit, stop_distance).
         """
         stop_pct = self._resolve_stop_pct(entry_price, atr14, ai_stop_pct)
@@ -188,19 +189,14 @@ class RiskAgent:
 
     @staticmethod
     def _resolve_stop_pct(entry_price: float, atr14: float, ai_stop_pct: float) -> float:
-        if ai_stop_pct > 0:
-            return max(MIN_STOP_PCT, min(MAX_STOP_PCT, ai_stop_pct))
-        atr_pct = ((0.8 * atr14) / entry_price) * 100.0 if entry_price > 0 else 2.5
-        return max(MIN_STOP_PCT, min(MAX_STOP_PCT, atr_pct))
+        return CATASTROPHE_STOP_PCT
 
     @staticmethod
     def _resolve_tp_pct(stop_pct: float, ai_tp_pct: float) -> float:
-        min_required_tp = max(MIN_TP_PCT, stop_pct * MIN_REWARD_RISK_RATIO)
         if ai_tp_pct > 0:
-            clamped_ai = max(min_required_tp, min(MAX_TP_PCT, ai_tp_pct))
+            clamped_ai = max(MIN_TP_PCT, min(MAX_TP_PCT, ai_tp_pct))
             return round(clamped_ai, 2)
-        default_tp = min(MAX_TP_PCT, max(min_required_tp, stop_pct * 1.8))
-        return round(default_tp, 2)
+        return DEFAULT_TP_PCT
 
     def calculate_position_size(self, allocated_usd: float, entry_price: float, stop_dist: float) -> float:
         """
@@ -248,24 +244,28 @@ class RiskAgent:
         self,
         trading_balance: float,
         withdrawable_pool: float,
-        pnl_usd: float
+        pnl_usd: float,
+        unrecovered_loss_usd: float = 0.0
     ) -> Tuple[float, float, float, float]:
         """
-        Ao longo do dia, divide todo lucro realizado em:
-        - 60% reinvestido imediatamente no Capital de Giro (efeito bola de neve intradiário)
-        - 40% reservado no Pool de Saque Diário (aguardando a janela das 22h-23h BRT).
-        Se a banca estiver abaixo do piso base, recompõe o piso primeiro.
+        Divide o lucro realizado respeitando o Modo Recuperação 100% do Capital:
+        - Se houver prejuízo anterior em aberto (unrecovered_loss_usd > 0), destina 100% do lucro
+          para recompor o Capital de Giro até zerar o déficit.
+        - O excedente acima do capital recuperado segue a regra normal: 60% Giro / 40% Saque.
         Retorna (new_trading_balance, new_withdrawable_pool, added_to_withdraw, added_to_reinvest).
         """
         if pnl_usd <= 0:
             new_trading = max(0.0, round(trading_balance + pnl_usd, 2))
             return new_trading, round(withdrawable_pool, 2), 0.0, 0.0
 
+        recovered_now = min(pnl_usd, max(0.0, unrecovered_loss_usd))
+        distributable_profit = max(0.0, round(pnl_usd - recovered_now, 2))
+
         total_after_trade = trading_balance + pnl_usd
         surplus_above_floor = max(0.0, total_after_trade - self.base_capital_floor)
-        candidate_withdraw = round(surplus_above_floor * WITHDRAW_PROFIT_RATIO, 2)
+        max_withdraw_by_floor = round(surplus_above_floor * WITHDRAW_PROFIT_RATIO, 2)
 
-        to_withdraw = min(round(pnl_usd * WITHDRAW_PROFIT_RATIO, 2), candidate_withdraw)
+        to_withdraw = min(round(distributable_profit * WITHDRAW_PROFIT_RATIO, 2), max_withdraw_by_floor)
         to_reinvest = round(pnl_usd - to_withdraw, 2)
 
         new_trading = round(trading_balance + to_reinvest, 2)

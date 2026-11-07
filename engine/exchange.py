@@ -318,6 +318,8 @@ class ExchangeClient:
     def _evaluate_price_triggers(current_price: float, stop_loss: float, take_profit: float) -> Dict[str, Any]:
         if current_price >= take_profit:
             return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit), "current_price": current_price}
+        if stop_loss > 0 and current_price <= stop_loss:
+            return {"status": "CLOSED_SL", "exit_price": current_price, "current_price": current_price}
         return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
 
     def _check_live_oco_orders(
@@ -345,4 +347,6 @@ class ExchangeClient:
     ) -> Dict[str, Any]:
         if current_price >= take_profit:
             return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit), "current_price": current_price}
+        if stop_loss > 0 and current_price <= stop_loss:
+            return {"status": "CLOSED_SL", "exit_price": current_price, "current_price": current_price}
         return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}

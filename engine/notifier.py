@@ -221,12 +221,13 @@ class TelegramNotifier:
         prev_portfolio_total: float = 0.0,
         current_portfolio_total: float = 0.0,
         invested_total: float = 0.0,
-        free_cash: float = 0.0
+        free_cash: float = 0.0,
+        unrecovered_loss_usd: float = 0.0
     ) -> bool:
         """Notifica fechamento de posição com resumo completo de patrimônio antes/depois e lucro da rodada."""
         tag = "🧪 <b>[TESTE SIMULADO]</b>\n" if is_simulated else ""
         header, result_line = self._resolve_human_close_summary(outcome, pnl_usd, entry_price, exit_price)
-        profit_block = self._format_profit_allocation(pnl_usd, to_reinvest, to_withdraw)
+        profit_block = self._format_profit_allocation(pnl_usd, to_reinvest, to_withdraw, unrecovered_loss_usd)
         eff_current = current_portfolio_total or (new_trading_balance + new_withdrawable_pool)
         eff_prev = prev_portfolio_total or max(0.0, eff_current - pnl_usd)
         portfolio_block = self._format_operation_portfolio_block(
@@ -252,22 +253,40 @@ class TelegramNotifier:
         exit_price: float
     ) -> Tuple[str, str]:
         pnl_pct = ((exit_price - entry_price) / entry_price) * 100
-        if outcome == "TP":
+        if pnl_usd >= 0:
             header = "💰 <b>CashBot — Venda com Lucro Concluída!</b>"
             line = f"✅ <b>Lucro da Rodada:</b> +US$ {pnl_usd:,.2f} (<b>+{pnl_pct:.2f}%</b>)"
             return header, line
-        header = "🛑 <b>CashBot — Venda de Proteção Acionada</b>"
-        line = f"🛡️ <b>Resultado da Rodada:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.2f}%)"
+        if outcome == "TIME_STOP":
+            header = "⏱️ <b>CashBot — Troca de Moeda por Tempo (48h)</b>"
+            line = f"🔄 <b>Ajuste de saída p/ destravar saldo:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.2f}%)"
+            return header, line
+        header = "🛑 <b>CashBot — Disjuntor de Segurança (-7.5%) Acionado</b>"
+        line = f"🛡️ <b>Perda travada p/ proteger a banca:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.2f}%)"
         return header, line
 
     @staticmethod
-    def _format_profit_allocation(pnl_usd: float, to_reinvest: float, to_withdraw: float) -> str:
+    def _format_profit_allocation(
+        pnl_usd: float,
+        to_reinvest: float,
+        to_withdraw: float,
+        unrecovered_loss_usd: float = 0.0
+    ) -> str:
         if pnl_usd <= 0:
-            return ""
+            return (
+                f"🛠️ <b>Modo Recuperação Ativado:</b>\n"
+                f"• Os próximos lucros irão <b>100% para o seu Capital de Giro</b> até recuperar totalmente os <b>US$ {unrecovered_loss_usd:,.2f}</b>!\n\n"
+            )
+        if unrecovered_loss_usd > 0:
+            return (
+                f"🏦 <b>Modo Recuperação de Capital (100% Reinvestido):</b>\n"
+                f"• 🔄 <b>Devolvido ao seu Capital:</b> +US$ {to_reinvest:,.2f}\n"
+                f"• 🎯 <b>Falta recuperar:</b> US$ {unrecovered_loss_usd:,.2f}\n\n"
+            )
         return (
             f"🏦 <b>Para onde foi esse lucro:</b>\n"
-            f"• 🔄 <b>Somado ao Capital de Giro (60%):</b> +US$ {to_reinvest:,.2f}\n"
-            f"• 💸 <b>Separado p/ seu Saque Hoje (40%):</b> +US$ {to_withdraw:,.2f}\n\n"
+            f"• 🔄 <b>Somado ao Capital de Giro:</b> +US$ {to_reinvest:,.2f}\n"
+            f"• 💸 <b>Separado p/ seu Saque Hoje:</b> +US$ {to_withdraw:,.2f}\n\n"
         )
 
     def notify_end_of_day_summary(
