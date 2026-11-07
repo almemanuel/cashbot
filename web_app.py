@@ -46,7 +46,7 @@ class BackgroundScheduler:
     Garante execução pontual mesmo quando o cron do GitHub Actions atrasa.
     """
 
-    def __init__(self, interval_seconds: int = 900, keepalive_seconds: int = 600):
+    def __init__(self, interval_seconds: int = 900, keepalive_seconds: int = 45):
         self.interval_seconds = interval_seconds
         self.keepalive_seconds = keepalive_seconds
         self.last_cycle_ts = 0.0
@@ -55,14 +55,14 @@ class BackgroundScheduler:
     def start(self) -> None:
         thread = threading.Thread(target=self._run_loop, daemon=True, name="cashbot-15m-scheduler")
         thread.start()
-        logger.info("Agendador nativo 15m + Auto Keep-Alive iniciado em background.")
+        logger.info("Agendador nativo 15m + Auto Keep-Alive (45s) iniciado em background.")
 
     def _run_loop(self) -> None:
         time.sleep(10)
         while True:
             self._tick_keepalive()
             self._tick_trading_cycle()
-            time.sleep(30)
+            time.sleep(15)
 
     def _tick_keepalive(self) -> None:
         now = time.time()
