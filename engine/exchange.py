@@ -1,6 +1,6 @@
 """
 Cliente de Exchange para Binance Spot Testnet com fallback para Simulação Completa.
-Suporta CCXT ou requisições REST diretas da Binance Testnet.
+Inclui Scanner Dinâmico de Mercado (1 request global /api/v3/ticker/24hr sem N+1).
 Segue Object Calisthenics (1 nível de indentação por método, sem else).
 """
 
@@ -20,7 +20,22 @@ except ImportError:
     HAS_CCXT = False
 
 BINANCE_TESTNET_BASE = "https://testnet.binance.vision"
-SYNTHETIC_BASE_PRICES = {"BTC/USDT": 92000.0, "ETH/USDT": 3400.0, "SOL/USDT": 185.0}
+BINANCE_PUBLIC_API = "https://api.binance.com/api/v3"
+CORE_WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+SYNTHETIC_BASE_PRICES = {
+    "BTC/USDT": 92000.0,
+    "ETH/USDT": 3400.0,
+    "SOL/USDT": 185.0,
+    "BNB/USDT": 620.0,
+    "XRP/USDT": 2.40,
+    "SUI/USDT": 3.20,
+}
+EXCLUDED_BASES = {
+    "USDC", "FDUSD", "USDT", "DAI", "TUSD", "BUSD", "USDP",
+    "USDE", "EUR", "GBP", "PAXG", "WBTC", "USD1", "First"
+}
+LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR")
+MIN_QUOTE_VOLUME_USD = 35_000_000.0
 
 
 class ExchangeClient:
@@ -53,9 +68,81 @@ class ExchangeClient:
             self.simulation_mode = True
             return None
 
-    def fetch_daily_candles(self, symbol: str, limit: int = 60) -> List[Dict[str, float]]:
+    def fetch_free_usdt_balance(self, fallback_balance: float) -> float:
         """
-        Coleta os últimos candles diários (1d).
+        Consulta o saldo real de USDT livre na Binance (quando conectado) ou retorna
+        o saldo total disponível (Giro + Pool não sacado) na simulação.
+        """
+        if self.simulation_mode or not self.exchange:
+            return fallback_balance
+        try:
+            balances = self.exchange.fetch_balance()
+            free_usdt = float(balances.get("USDT", {}).get("free", fallback_balance))
+            return free_usdt if free_usdt > 0 else fallback_balance
+        except Exception as e:
+            logger.warning(f"Não foi possível ler saldo USDT na Binance, usando ledger local: {e}")
+            return fallback_balance
+
+    def discover_dynamic_watchlist(self, max_pairs: int = 6) -> List[str]:
+        """
+        Varre todo o mercado Spot da Binance em 1 única requisição (/api/v3/ticker/24hr)
+        e seleciona as moedas de alta liquidez com melhor momentum no dia, somadas à Core Watchlist.
+        """
+        tickers = self._fetch_24h_tickers()
+        if not tickers:
+            return list(CORE_WATCHLIST)
+
+        eligible = [t for t in tickers if self._is_eligible_usdt_ticker(t)]
+        ranked = sorted(eligible, key=self._score_ticker_momentum, reverse=True)
+        discovered = [self._to_slash_symbol(t["symbol"]) for t in ranked]
+
+        merged = list(dict.fromkeys(CORE_WATCHLIST + discovered))
+        selected = merged[:max_pairs]
+        logger.info(f"Watchlist Dinâmica selecionada ({len(selected)} ativos): {selected}")
+        return selected
+
+    def _fetch_24h_tickers(self) -> List[Dict[str, Any]]:
+        try:
+            resp = requests.get(f"{BINANCE_PUBLIC_API}/ticker/24hr", timeout=10)
+            return resp.json() if resp.status_code == 200 else []
+        except Exception as e:
+            logger.warning(f"Scanner 24h indisponível, usando Core Watchlist: {e}")
+            return []
+
+    def _is_eligible_usdt_ticker(self, ticker: Dict[str, Any]) -> bool:
+        raw_symbol = str(ticker.get("symbol", ""))
+        if not raw_symbol.endswith("USDT"):
+            return False
+        base = raw_symbol[:-4]
+        if not self._is_valid_base_asset(base):
+            return False
+        quote_vol = float(ticker.get("quoteVolume", 0.0))
+        change_pct = float(ticker.get("priceChangePercent", 0.0))
+        return quote_vol >= MIN_QUOTE_VOLUME_USD and -4.0 <= change_pct <= 22.0
+
+    @staticmethod
+    def _is_valid_base_asset(base: str) -> bool:
+        if not base or base in EXCLUDED_BASES:
+            return False
+        return not base.endswith(LEVERAGED_SUFFIXES)
+
+    @staticmethod
+    def _score_ticker_momentum(ticker: Dict[str, Any]) -> float:
+        """Combina força compradora no dia (1% a 12% ideal) com liquidez institucional."""
+        change_pct = float(ticker.get("priceChangePercent", 0.0))
+        quote_vol_millions = float(ticker.get("quoteVolume", 0.0)) / 1_000_000.0
+        vol_bonus = min(30.0, quote_vol_millions / 25.0)
+        if 1.0 <= change_pct <= 12.0:
+            return 50.0 + (change_pct * 3.0) + vol_bonus
+        return change_pct + vol_bonus
+
+    @staticmethod
+    def _to_slash_symbol(raw_symbol: str) -> str:
+        return f"{raw_symbol[:-4]}/USDT"
+
+    def fetch_daily_candles(self, symbol: str, limit: int = 250) -> List[Dict[str, float]]:
+        """
+        Coleta os últimos candles diários (1d) — padrão 250 para cálculo real da EMA 200.
         Retorna lista de dicts com 'open', 'high', 'low', 'close', 'volume'.
         """
         live_candles = self._fetch_binance_klines(symbol, limit)
@@ -65,7 +152,7 @@ class ExchangeClient:
 
     def _fetch_binance_klines(self, symbol: str, limit: int) -> List[Dict[str, float]]:
         clean_symbol = symbol.replace("/", "").upper()
-        url = f"https://api.binance.com/api/v3/klines?symbol={clean_symbol}&interval=1d&limit={limit}"
+        url = f"{BINANCE_PUBLIC_API}/klines?symbol={clean_symbol}&interval=1d&limit={limit}"
         try:
             resp = requests.get(url, timeout=10)
             return self._parse_klines_response(resp)

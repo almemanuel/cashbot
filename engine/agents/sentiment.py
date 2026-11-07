@@ -6,6 +6,7 @@ Segue Object Calisthenics (1 nível de indentação por método, sem else, cole�
 """
 
 import os
+import re
 import json
 import logging
 import xml.etree.ElementTree as ET
@@ -19,11 +20,32 @@ logger = logging.getLogger("cashbot.sentiment")
 
 FEAR_AND_GREED_API = "https://api.alternative.me/fng/?limit=1"
 CRYPTOCOMPARE_NEWS_API = "https://min-api.cryptocompare.com/data/v2/news/"
+GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 COIN_NAMES = {
     "BTC": "Bitcoin",
     "ETH": "Ethereum",
     "SOL": "Solana",
+    "BNB": "BNB Binance",
+    "XRP": "Ripple XRP",
+    "ADA": "Cardano",
+    "DOGE": "Dogecoin",
+    "AVAX": "Avalanche",
+    "LINK": "Chainlink",
+    "SUI": "Sui",
+    "TON": "Toncoin",
+    "DOT": "Polkadot",
+    "NEAR": "NEAR Protocol",
+    "LTC": "Litecoin",
+    "UNI": "Uniswap",
+    "APT": "Aptos",
+    "ARB": "Arbitrum",
+    "OP": "Optimism",
+    "PEPE": "Pepe",
+    "TRX": "Tron",
+    "RENDER": "Render",
+    "FET": "Artificial Superintelligence",
+    "INJ": "Injective",
 }
 
 CRITICAL_VETO_KEYWORDS = [
@@ -43,11 +65,68 @@ NEGATIVE_NEWS_KEYWORDS = [
 
 
 class SentimentAgent:
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        self.model = "gemini-1.5-flash"
+        self.explicit_model = model or os.getenv("GEMINI_MODEL")
+        self._ranked_models: List[str] = []
         self._fng_cache: Optional[FearAndGreed] = None
         self._news_cache: Dict[str, List[str]] = {}
+
+    def resolve_ranked_models(self) -> List[str]:
+        """
+        Descobre dinamicamente os modelos Gemini Flash liberados na chave, ordenados do mais forte
+        para o mais estável (ex: 2.5-flash), com cache em memória por ciclo (zero N+1).
+        """
+        if self.explicit_model:
+            return [self.explicit_model]
+        if self._ranked_models:
+            return self._ranked_models
+
+        available = self._fetch_available_gemini_models()
+        self._ranked_models = self._rank_flash_models(available)
+        logger.info(f"Modelos Gemini ranqueados automaticamente: {self._ranked_models[:3]}")
+        return self._ranked_models
+
+    def _fetch_available_gemini_models(self) -> List[str]:
+        if not self.api_key:
+            return []
+        try:
+            resp = requests.get(f"{GEMINI_MODELS_URL}?key={self.api_key}", timeout=8)
+            return self._parse_gemini_models_list(resp)
+        except Exception as e:
+            logger.debug(f"Não foi possível listar modelos Gemini: {e}")
+            return []
+
+    def _parse_gemini_models_list(self, resp: requests.Response) -> List[str]:
+        if resp.status_code != 200:
+            return []
+        models = resp.json().get("models", [])
+        return [
+            str(m.get("name", "")).replace("models/", "")
+            for m in models
+            if self._supports_flash_generation(m)
+        ]
+
+    @staticmethod
+    def _supports_flash_generation(model_meta: Dict[str, Any]) -> bool:
+        name = str(model_meta.get("name", "")).lower()
+        methods = model_meta.get("supportedGenerationMethods", [])
+        if "preview" in name or "exp" in name or "tts" in name or "image" in name:
+            return False
+        return "flash" in name and "generateContent" in methods
+
+    def _rank_flash_models(self, candidates: List[str]) -> List[str]:
+        if not candidates:
+            return ["gemini-2.5-flash"]
+        unique = list(dict.fromkeys(candidates))
+        return sorted(unique, key=self._score_gemini_version, reverse=True)
+
+    @staticmethod
+    def _score_gemini_version(model_name: str) -> float:
+        match = re.search(r"gemini-(\d+(?:\.\d+)?)", model_name.lower())
+        version = float(match.group(1)) if match else 2.0
+        lite_penalty = -0.05 if "lite" in model_name.lower() else 0.0
+        return version + lite_penalty
 
     def reset_cycle_cache(self) -> None:
         """Limpa o cache em memória no início de um novo ciclo operacional."""
@@ -213,28 +292,42 @@ class SentimentAgent:
 
     def _request_gemini_analysis(self, symbol: str, fng: FearAndGreed, headlines: HeadlineCollection) -> Optional[AgentVerdict]:
         prompt = self._build_prompt(symbol, fng, headlines)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        for model_name in list(self.resolve_ranked_models()):
+            verdict = self._try_gemini_model(model_name, prompt, fng)
+            if verdict is not None:
+                return verdict
+            self._demote_failed_model(model_name)
+        return None
+
+    def _demote_failed_model(self, model_name: str) -> None:
+        if model_name not in self._ranked_models:
+            return
+        self._ranked_models.remove(model_name)
+        self._ranked_models.append(model_name)
+
+    def _try_gemini_model(self, model_name: str, prompt: str, fng: FearAndGreed) -> Optional[AgentVerdict]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"response_mime_type": "application/json"}
         }
         try:
             resp = requests.post(url, json=payload, timeout=15)
-            return self._parse_gemini_response(resp, fng)
+            return self._parse_gemini_response(resp, fng, model_name)
         except Exception as e:
-            logger.error(f"Falha na requisição Gemini: {e}")
+            logger.error(f"Falha na requisição Gemini ({model_name}): {e}")
             return None
 
-    def _parse_gemini_response(self, resp: requests.Response, fng: FearAndGreed) -> Optional[AgentVerdict]:
+    def _parse_gemini_response(self, resp: requests.Response, fng: FearAndGreed, model_name: str) -> Optional[AgentVerdict]:
         if resp.status_code != 200:
-            logger.error(f"Erro na API Gemini ({resp.status_code}): {resp.text}")
+            logger.warning(f"Modelo Gemini {model_name} indisponível ({resp.status_code}), tentando próximo da fila...")
             return None
         raw_text = self._extract_gemini_text(resp.json())
         data = json.loads(raw_text)
         return AgentVerdict(
             score=float(data.get("score", float(fng.value))),
             veto=bool(data.get("veto", False)),
-            reasoning=str(data.get("reasoning", f"Sentimento avaliado com base no índice {fng.classification} e notícias."))
+            reasoning=str(data.get("reasoning", f"Sentimento avaliado via {model_name}."))
         )
 
     @staticmethod
@@ -247,25 +340,24 @@ class SentimentAgent:
     @staticmethod
     def _build_prompt(symbol: str, fng: FearAndGreed, headlines: HeadlineCollection) -> str:
         return f"""
-Você é um Analista de Risco, Sentimento e Notícias de Criptoativos.
-Avalie o sentimento de mercado e o noticiário atual para {symbol}.
+Você é um Analista de Fluxo, Narrativa e Notícias para GIRO RÁPIDO (Short-Term Swing Trade) em Criptoativos.
+O objetivo é avaliar se o humor atual e as manchetes de {symbol} favorecem um tiro curto de alta (+3% a +8%) nas próximas 24h a 72h.
 
 Dados atuais:
 - Crypto Fear & Greed Index (Macro): {fng.value}/100 ({fng.classification})
 - Últimas Manchetes de {symbol}:
 {headlines.format_bullet_list()}
 
-Critérios:
-1. Atribua um score de 0 a 100 combinando o humor macro (Fear & Greed) e o impacto das manchetes específicas de {symbol}.
-2. Veto (veto: true) IMEDIATO se as manchetes relatarem hack, exploit, parada na rede (outage/halt), insolvência ou risco sistêmico severo contra {symbol}.
-3. Se o sentimento estiver favorável (55 a 75) e as notícias trouxerem catalisadores positivos (fluxo institucional, ETF, adoção, atualizações), atribua um score alto (75-90).
-4. Em ganância extrema (> 85) ou notícias negativas relevantes, reduza a nota devido ao risco de correção.
+Critérios para Giro Rápido:
+1. Dê nota alta (70 a 92) se houver narrativa positiva de curto prazo, entrada de fluxo comprador, interesse do mercado ou ausência de notícias negativas travando o ativo.
+2. Veto (veto: true) IMEDIATO se as manchetes relatarem hack, exploit, parada na rede (outage/halt), despejo massivo (token unlock/dump) ou processo grave contra {symbol}.
+3. Se o mercado estiver neutro/cauteloso mas sem risco específico contra {symbol}, atribua nota moderada (60 a 72) para não travar bons setups gráficos de repique.
 
 Responda EXCLUSIVAMENTE em formato JSON com o schema:
 {{
   "score": <número float 0-100>,
   "veto": <true ou false>,
-  "reasoning": "<explicação concisa de até 2 frases em português citando o Fear & Greed e o tom das notícias>"
+  "reasoning": "<explicação direta de até 2 frases em português sobre o impacto das notícias no curto prazo>"
 }}
 """
 

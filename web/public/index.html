@@ -97,16 +97,21 @@
       <div class="flex items-center justify-between text-xs text-slate-400 font-medium mb-1">
         <span class="flex items-center gap-1.5">
           <i class="fa-solid fa-piggy-bank text-emerald-400"></i>
-          POOL DE RETIRADA (LUCRO PROTEGIDO)
+          VALOR SUGERIDO PARA SAQUE (LUCRO LIVRE)
         </span>
         <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">SAQUE VIA PIX</span>
       </div>
 
-      <div class="flex items-baseline space-x-2 mt-1">
-        <span class="text-3xl font-extrabold text-white tracking-tight" id="withdrawableUsd">$0.00</span>
-        <span class="text-xs text-emerald-400 font-semibold" id="withdrawableBrl">≈ R$ 0,00</span>
+      <div class="flex items-center justify-between mt-1">
+        <div class="flex items-baseline space-x-2">
+          <span class="text-3xl font-extrabold text-white tracking-tight" id="withdrawableUsd">$0.00</span>
+          <span class="text-xs text-emerald-400 font-semibold" id="withdrawableBrl">≈ R$ 0,00</span>
+        </div>
+        <button onclick="triggerAction('/api/confirm-withdraw', 'Registrando saque realizado...')" class="text-[11px] px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-semibold transition active:scale-95">
+          <i class="fa-solid fa-check mr-1"></i>Já Saquei
+        </button>
       </div>
-      <p class="text-[11px] text-slate-400 mt-0.5">50% de cada trade lucrativo retido e blindado de risco.</p>
+      <p class="text-[11px] text-slate-400 mt-1">Banca base protegida + 60% reinvestido no giro (bola de neve) e 40% separado p/ saque.</p>
 
       <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
         <div>

@@ -113,50 +113,57 @@ function renderData(data) {
   document.getElementById('tradingBalanceUsd').innerText = `$${trading.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   document.getElementById('totalPortfolioUsd').innerText = `$${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  // 2. Posição Aberta
+  // 2. Posições Abertas (Multi-Posição / Diversificação)
   const openContent = document.getElementById('openTradeContent');
   const badgeStatus = document.getElementById('badgeTradeStatus');
+  const openTrades = (data.open_trades && data.open_trades.length > 0)
+    ? data.open_trades
+    : (openTrade && openTrade.status === 'OPEN_OCO' ? [openTrade] : []);
 
-  if (openTrade && openTrade.status === 'OPEN_OCO') {
+  if (openTrades.length > 0) {
     badgeStatus.className = 'text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 animate-pulse';
-    badgeStatus.innerText = 'OCO ATIVA NO LIVRO';
+    badgeStatus.innerText = `${openTrades.length} POSIÇÃO(ÕES) ATIVA(S)`;
 
-    const entry = Number(openTrade.entry_price);
-    const sl = Number(openTrade.stop_loss);
-    const tp = Number(openTrade.take_profit);
-    const qty = Number(openTrade.quantity);
+    openContent.innerHTML = `<div class="space-y-3">` + openTrades.map(ot => {
+      const entry = Number(ot.entry_price);
+      const sl = Number(ot.stop_loss);
+      const tp = Number(ot.take_profit);
+      const qty = Number(ot.quantity);
+      const slPct = entry > 0 ? (((entry - sl) / entry) * 100).toFixed(1) : '0.0';
+      const tpPct = entry > 0 ? (((tp - entry) / entry) * 100).toFixed(1) : '0.0';
 
-    openContent.innerHTML = `
-      <div class="space-y-3">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span class="text-lg font-extrabold text-white">${openTrade.symbol}</span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">LONG SPOT</span>
+      return `
+        <div class="space-y-2.5 p-3 rounded-xl bg-slate-900/50 border border-slate-800/90">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="text-base font-extrabold text-white">${ot.symbol}</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">GIRO RÁPIDO</span>
+            </div>
+            <span class="text-xs font-mono text-slate-300">Alocado: $${(entry * qty).toFixed(2)}</span>
           </div>
-          <span class="text-xs font-mono text-slate-300">Qtd: ${qty.toFixed(6)}</span>
+
+          <div class="grid grid-cols-3 gap-2 text-center text-xs py-2 bg-slate-950/60 rounded-xl border border-slate-800">
+            <div>
+              <span class="text-[10px] text-rose-400 font-semibold block uppercase">Stop (-${slPct}%)</span>
+              <span class="font-bold text-rose-300">$${sl.toLocaleString()}</span>
+            </div>
+            <div>
+              <span class="text-[10px] text-slate-400 font-semibold block uppercase">Entrada</span>
+              <span class="font-bold text-white">$${entry.toLocaleString()}</span>
+            </div>
+            <div>
+              <span class="text-[10px] text-emerald-400 font-semibold block uppercase">Alvo (+${tpPct}%)</span>
+              <span class="font-bold text-emerald-300">$${tp.toLocaleString()}</span>
+            </div>
+          </div>
+
+          <div class="text-[11px] text-slate-400 flex items-center justify-between">
+            <span>Risco Controlado: -$${((entry - sl) * qty).toFixed(2)}</span>
+            <span class="text-emerald-400 font-semibold">Lucro Esperado: +$${((tp - entry) * qty).toFixed(2)}</span>
+          </div>
         </div>
-
-        <div class="grid grid-cols-3 gap-2 text-center text-xs py-2 bg-slate-950/60 rounded-xl border border-slate-800">
-          <div>
-            <span class="text-[10px] text-rose-400 font-semibold block uppercase">Stop Loss</span>
-            <span class="font-bold text-rose-300">$${sl.toLocaleString()}</span>
-          </div>
-          <div>
-            <span class="text-[10px] text-slate-400 font-semibold block uppercase">Entrada</span>
-            <span class="font-bold text-white">$${entry.toLocaleString()}</span>
-          </div>
-          <div>
-            <span class="text-[10px] text-emerald-400 font-semibold block uppercase">Take Profit</span>
-            <span class="font-bold text-emerald-300">$${tp.toLocaleString()}</span>
-          </div>
-        </div>
-
-        <div class="text-[11px] text-slate-400 flex items-center justify-between">
-          <span>Risco Máx: -$${((entry - sl) * qty).toFixed(2)}</span>
-          <span class="text-emerald-400 font-semibold">Alvo 2R: +$${((tp - entry) * qty).toFixed(2)}</span>
-        </div>
-      </div>
-    `;
+      `;
+    }).join('') + `</div>`;
   } else {
     badgeStatus.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700';
     badgeStatus.innerText = 'IDLE (AGUARDANDO OPORTUNIDADE)';
@@ -179,13 +186,13 @@ function renderData(data) {
     const sentScore = Number(latest.sentiment_score);
     const veto = Boolean(latest.veto_applied);
 
-    const scoreColor = finalScore >= 75 && !veto ? 'text-emerald-400' : (veto ? 'text-rose-400' : 'text-amber-400');
+    const scoreColor = finalScore >= 65 && !veto ? 'text-emerald-400' : (veto ? 'text-rose-400' : 'text-amber-400');
 
     lastConsensusContainer.innerHTML = `
       <div class="flex items-center justify-between">
         <span class="text-xs text-slate-300 font-semibold">Consenso Final Ponderado:</span>
         <span class="text-base font-extrabold ${scoreColor}">
-          ${finalScore.toFixed(1)}/100 ${veto ? '(VETO)' : (finalScore >= 75 ? '🎯 COMPRA' : 'AGUARDAR')}
+          ${finalScore.toFixed(1)}/100 ${veto ? '(VETO)' : (finalScore >= 65 ? '🎯 COMPRA' : 'AGUARDAR')}
         </span>
       </div>
       <div class="grid grid-cols-2 gap-2 text-xs pt-1">
@@ -210,7 +217,7 @@ function renderData(data) {
     commContainer.innerHTML = `<p class="text-xs text-slate-400 text-center py-4">Nenhum log encontrado.</p>`;
   } else {
     commContainer.innerHTML = logs.map(l => {
-      const isApproved = Number(l.final_score) >= 75 && !l.veto_applied;
+      const isApproved = Number(l.final_score) >= 65 && !l.veto_applied;
       const badge = isApproved 
         ? `<span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold text-[10px]">APROVADO</span>`
         : (l.veto_applied 

@@ -14,14 +14,19 @@ from typing import Dict, Any, Callable, List
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENGINE_DIR = os.path.join(BASE_DIR, "engine")
 STATIC_DIR = os.path.join(BASE_DIR, "web", "public")
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(ENGINE_DIR, ".env"), override=True)
 sys.path.append(ENGINE_DIR)
 
 from database import Database
 from main import TradingEngine
 from notifier import TelegramNotifier
+from agents.risk import RiskAgent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
 logger = logging.getLogger("cashbot.web")
@@ -123,6 +128,7 @@ class CashBotHandler(SimpleHTTPRequestHandler):
             "/api/simulate-buy": self._handle_simulate_buy,
             "/api/simulate-tp": self._handle_simulate_tp,
             "/api/simulate-sl": self._handle_simulate_sl,
+            "/api/confirm-withdraw": self._handle_confirm_withdraw,
             "/api/test-notification": self._handle_test_notification,
             "/api/save-config": self._handle_save_config,
         }
@@ -180,10 +186,13 @@ class CashBotHandler(SimpleHTTPRequestHandler):
 
         db.close_trade(open_trade["id"], tp, "CLOSED_TP", pnl)
 
-        to_withdraw = round(pnl * 0.50, 2)
-        to_reinvest = round(pnl * 0.50, 2)
         ledger = db.get_ledger()
-        db.update_ledger(ledger["trading_balance"] + to_reinvest, ledger["withdrawable_pool"] + to_withdraw)
+        new_trading, new_pool, to_withdraw, to_reinvest = RiskAgent().allocate_trade_pnl(
+            trading_balance=ledger["trading_balance"],
+            withdrawable_pool=ledger["withdrawable_pool"],
+            pnl_usd=pnl,
+        )
+        db.update_ledger(new_trading, new_pool)
 
         TelegramNotifier().notify_order_closed(
             symbol=open_trade["symbol"],
@@ -194,10 +203,15 @@ class CashBotHandler(SimpleHTTPRequestHandler):
             to_withdraw=to_withdraw,
             to_reinvest=to_reinvest,
             is_simulated=True,
+            new_trading_balance=new_trading,
+            new_withdrawable_pool=new_pool,
         )
         self._send_json({
             "success": True,
-            "message": f"🎯 Take Profit atingido! +${pnl:.2f} de lucro apurado (+${to_withdraw:.2f} no Pool de Saque).",
+            "message": (
+                f"🎯 Take Profit atingido! +${pnl:.2f} de lucro "
+                f"(+${to_withdraw:.2f} liberado p/ Saque Pix | Total disponível p/ Saque: ${new_pool:.2f})."
+            ),
         })
 
     def _handle_simulate_sl(self, _payload: Dict[str, Any]) -> None:
@@ -230,6 +244,20 @@ class CashBotHandler(SimpleHTTPRequestHandler):
         self._send_json({
             "success": True,
             "message": f"🛑 Stop Loss executado. Risco contido em ${abs(pnl):.2f}.",
+        })
+
+    def _handle_confirm_withdraw(self, _payload: Dict[str, Any]) -> None:
+        db = Database()
+        ledger = db.get_ledger()
+        withdrawn = ledger["withdrawable_pool"]
+        if withdrawn <= 0:
+            self._send_json({"success": False, "error": "Ainda não há saldo acumulado no Pool de Saque."}, 400)
+            return
+
+        db.update_ledger(ledger["trading_balance"], 0.0)
+        self._send_json({
+            "success": True,
+            "message": f"💸 Saque de ${withdrawn:.2f} registrado! Seu Capital de Giro (${ledger['trading_balance']:.2f}) segue intacto.",
         })
 
     def _handle_test_notification(self, _payload: Dict[str, Any]) -> None:

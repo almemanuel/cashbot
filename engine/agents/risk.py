@@ -1,28 +1,53 @@
 """
-Agente 3: Risco e Dimensionamento Determinístico
-Realiza cálculos matemáticos de ATR, EMAs, RSI e define Stop Loss (1.5x ATR)
-e Take Profit (2.0x SL -> R:R 1:2).
+Agente 3: Risco, Velocidade de Giro e Dimensionamento Híbrido (IA + Guardrails)
+Calcula EMAs, RSI, ATR, Suporte/Resistência de 7 dias e valida os alvos dinâmicos
+escolhidos pela IA para tiros curtos (giro rápido de caixa).
+Segue Object Calisthenics (1 nível de indentação por método, sem else).
 """
 
 from typing import List, Dict, Any, Tuple
+
+MIN_STOP_PCT = 1.5
+MAX_STOP_PCT = 4.5
+MIN_TP_PCT = 3.0
+MAX_TP_PCT = 8.5
+MIN_REWARD_RISK_RATIO = 1.5
+BINANCE_MIN_NOTIONAL_USD = 10.0
+SAFE_MIN_SLOT_USD = 12.0
+MAX_CONCURRENT_POSITIONS = 3
+MIN_WITHDRAWABLE_USD = 10.0
+DEFAULT_CAPITAL_USAGE_PCT = 0.95
+REINVEST_PROFIT_RATIO = 0.60
+WITHDRAW_PROFIT_RATIO = 0.40
+
+
+def _round_price(value: float) -> float:
+    """Preserva casas decimais adequadas para qualquer faixa de preço (ex: BTC vs PEPE)."""
+    if value < 0.001:
+        return round(value, 8)
+    if value < 1.0:
+        return round(value, 6)
+    return round(value, 4)
+
 
 def calculate_ema(prices: List[float], period: int) -> List[float]:
     """Calcula a Média Móvel Exponencial (EMA)."""
     if len(prices) < period:
         return [prices[-1]] * len(prices)
-    
+
     multiplier = 2.0 / (period + 1)
     ema = [sum(prices[:period]) / period]
     for price in prices[period:]:
         ema.append((price - ema[-1]) * multiplier + ema[-1])
     return ema
 
+
 def calculate_rsi(prices: List[float], period: int = 14) -> float:
     """Calcula o Índice de Força Relativa (RSI de 14 períodos)."""
     if len(prices) <= period:
         return 50.0
 
-    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    deltas = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
     gains = [d if d > 0 else 0.0 for d in deltas]
     losses = [-d if d < 0 else 0.0 for d in deltas]
 
@@ -38,19 +63,17 @@ def calculate_rsi(prices: List[float], period: int = 14) -> float:
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
 
+
 def calculate_atr(candles: List[Dict[str, float]], period: int = 14) -> float:
-    """
-    Calcula o Average True Range (ATR) de 14 períodos.
-    candles: lista de dicts com 'high', 'low', 'close'.
-    """
+    """Calcula o Average True Range (ATR) de 14 períodos."""
     if len(candles) < 2:
         return 0.0
 
     true_ranges = []
     for i in range(1, len(candles)):
-        h = candles[i]['high']
-        l = candles[i]['low']
-        prev_close = candles[i-1]['close']
+        h = candles[i]["high"]
+        l = candles[i]["low"]
+        prev_close = candles[i - 1]["close"]
         tr = max(h - l, abs(h - prev_close), abs(l - prev_close))
         true_ranges.append(tr)
 
@@ -62,16 +85,17 @@ def calculate_atr(candles: List[Dict[str, float]], period: int = 14) -> float:
         atr = (atr * (period - 1) + tr) / period
     return atr
 
-class RiskAgent:
-    """Calcula dimensionamento de posição, Stop Loss e Take Profit com base no SDD."""
 
-    def __init__(self, risk_pct_per_trade: float = 0.02, max_position_pct: float = 0.30):
-        self.risk_pct_per_trade = risk_pct_per_trade  # 2% de risco de perda máxima do capital
-        self.max_position_pct = max_position_pct      # Alocação máxima de 30% do saldo total
+class RiskAgent:
+    """Dimensiona posição de giro rápido e calcula divisão inteligente entre Banca e Saque."""
+
+    def __init__(self, capital_usage_pct: float = DEFAULT_CAPITAL_USAGE_PCT, base_capital_floor: float = 100.0):
+        self.capital_usage_pct = capital_usage_pct
+        self.base_capital_floor = base_capital_floor
 
     def compute_indicators(self, candles: List[Dict[str, float]]) -> Dict[str, Any]:
-        """Calcula EMAs (20, 50, 200), RSI (14) e ATR (14)."""
-        closes = [c['close'] for c in candles]
+        """Calcula EMAs (20, 50, 200), RSI (14), ATR (14) e Máxima/Mínima de 7 dias."""
+        closes = [c["close"] for c in candles]
         current_price = closes[-1] if closes else 0.0
 
         ema20 = calculate_ema(closes, 20)[-1] if len(closes) >= 20 else current_price
@@ -80,51 +104,128 @@ class RiskAgent:
         rsi14 = calculate_rsi(closes, 14)
         atr14 = calculate_atr(candles, 14)
 
+        recent_slice = candles[-7:] if len(candles) >= 7 else candles
+        high_7d = max((c["high"] for c in recent_slice), default=current_price)
+        low_7d = min((c["low"] for c in recent_slice), default=current_price)
+
         return {
             "current_price": current_price,
-            "ema20": round(ema20, 4),
-            "ema50": round(ema50, 4),
-            "ema200": round(ema200, 4),
+            "ema20": _round_price(ema20),
+            "ema50": _round_price(ema50),
+            "ema200": _round_price(ema200),
             "rsi14": round(rsi14, 2),
-            "atr14": round(atr14, 4),
+            "atr14": _round_price(atr14),
+            "recent_high_7d": _round_price(high_7d),
+            "recent_low_7d": _round_price(low_7d),
         }
 
-    def calculate_levels(self, entry_price: float, atr14: float) -> Tuple[float, float, float]:
+    def calculate_levels(
+        self,
+        entry_price: float,
+        atr14: float,
+        ai_stop_pct: float = 0.0,
+        ai_tp_pct: float = 0.0
+    ) -> Tuple[float, float, float]:
         """
-        Stop Loss: Entrada - (1.5 * ATR14)
-        Take Profit: Entrada + (2.0 * Distância SL) [R:R 1:2]
-        Retorna (stop_loss, take_profit, stop_distance)
+        Define Stop Loss e Take Profit de giro rápido combinando a escolha da IA
+        com guardrails de segurança (Stop entre 1.5% e 4.5%; Alvo entre 3.0% e 8.5%).
+        Retorna (stop_loss, take_profit, stop_distance).
         """
-        stop_dist = 1.5 * atr14
-        # Evita stop loss negativo ou zerado em ativos de alta volatilidade
-        if stop_dist >= entry_price * 0.5:
-            stop_dist = entry_price * 0.05  # limite de 5% de segurança
+        stop_pct = self._resolve_stop_pct(entry_price, atr14, ai_stop_pct)
+        tp_pct = self._resolve_tp_pct(stop_pct, ai_tp_pct)
 
-        stop_loss = round(entry_price - stop_dist, 4)
-        take_profit = round(entry_price + (2.0 * stop_dist), 4)
+        stop_dist = entry_price * (stop_pct / 100.0)
+        tp_dist = entry_price * (tp_pct / 100.0)
 
+        stop_loss = _round_price(entry_price - stop_dist)
+        take_profit = _round_price(entry_price + tp_dist)
         return stop_loss, take_profit, stop_dist
 
-    def calculate_position_size(self, balance: float, entry_price: float, stop_dist: float) -> float:
+    @staticmethod
+    def _resolve_stop_pct(entry_price: float, atr14: float, ai_stop_pct: float) -> float:
+        if ai_stop_pct > 0:
+            return max(MIN_STOP_PCT, min(MAX_STOP_PCT, ai_stop_pct))
+        atr_pct = ((0.8 * atr14) / entry_price) * 100.0 if entry_price > 0 else 2.5
+        return max(MIN_STOP_PCT, min(MAX_STOP_PCT, atr_pct))
+
+    @staticmethod
+    def _resolve_tp_pct(stop_pct: float, ai_tp_pct: float) -> float:
+        min_required_tp = max(MIN_TP_PCT, stop_pct * MIN_REWARD_RISK_RATIO)
+        if ai_tp_pct > 0:
+            clamped_ai = max(min_required_tp, min(MAX_TP_PCT, ai_tp_pct))
+            return round(clamped_ai, 2)
+        default_tp = min(MAX_TP_PCT, max(min_required_tp, stop_pct * 1.8))
+        return round(default_tp, 2)
+
+    def calculate_position_size(self, allocated_usd: float, entry_price: float, stop_dist: float) -> float:
         """
-        Calcula a quantidade de moedas a comprar respeitando o risco máximo por trade
-        e o teto de capital de giro alocado.
+        Converte o capital em dólar alocado para este slot na quantidade exata de moedas,
+        respeitando o lote mínimo de US$ 10.00 da Binance Spot.
         """
-        if balance <= 0 or entry_price <= 0 or stop_dist <= 0:
+        if allocated_usd < BINANCE_MIN_NOTIONAL_USD or entry_price <= 0:
             return 0.0
 
-        # Risco financeiro máximo aceito neste trade (ex: 2% do saldo)
-        risk_budget = balance * self.risk_pct_per_trade
-        # Quantidade necessária para que a perda no Stop Loss seja igual ao risk_budget
-        qty_by_risk = risk_budget / stop_dist
+        raw_qty = allocated_usd / entry_price
+        if entry_price < 0.01:
+            return round(raw_qty, 0)
+        return round(raw_qty, 6)
 
-        # Teto máximo de capital de giro empregado nesta ordem
-        max_capital = balance * self.max_position_pct
-        qty_by_capital = max_capital / entry_price
+    def split_capital_for_candidates(
+        self,
+        free_balance: float,
+        scores: List[float],
+        open_positions_count: int = 0
+    ) -> List[float]:
+        """
+        Divide o capital livre de forma inteligente entre as oportunidades aprovadas na rodada,
+        permitindo diversificar em até MAX_CONCURRENT_POSITIONS (3) ativos simultâneos
+        desde que cada posição receba pelo menos SAFE_MIN_SLOT_USD (US$ 12).
+        """
+        deployable = round(free_balance * self.capital_usage_pct, 2)
+        slots_left = max(0, MAX_CONCURRENT_POSITIONS - open_positions_count)
+        max_affordable_slots = int(deployable // SAFE_MIN_SLOT_USD)
+        allowed_count = min(len(scores), slots_left, max_affordable_slots)
 
-        # Escolhe a quantidade mais conservadora
-        chosen_qty = min(qty_by_risk, qty_by_capital)
+        if allowed_count <= 0:
+            return []
 
-        # Arredondamento seguro (mínimo de precisão)
-        return round(chosen_qty, 6)
+        if allowed_count == 1 and open_positions_count == 0 and deployable >= (SAFE_MIN_SLOT_USD * 2.2):
+            return [round(deployable * 0.55, 2)]
 
+        selected_scores = scores[:allowed_count]
+        total_score = sum(selected_scores)
+        return [
+            round(deployable * (s / total_score), 2)
+            for s in selected_scores
+        ]
+
+    def allocate_trade_pnl(
+        self,
+        trading_balance: float,
+        withdrawable_pool: float,
+        pnl_usd: float
+    ) -> Tuple[float, float, float, float]:
+        """
+        Aplica Recomposição da Banca Base + Bola de Neve + Trava de Saque Mínimo da Binance (US$ 10).
+        Enquanto o valor separável para saque for menor que US$ 10.00, 100% do lucro fica
+        reinvestido no Capital de Giro multiplicando a banca.
+        Retorna (new_trading_balance, new_withdrawable_pool, added_to_withdraw, added_to_reinvest).
+        """
+        if pnl_usd <= 0:
+            new_trading = max(0.0, round(trading_balance + pnl_usd, 2))
+            return new_trading, round(withdrawable_pool, 2), 0.0, 0.0
+
+        total_after_trade = trading_balance + pnl_usd
+        surplus_above_floor = max(0.0, total_after_trade - self.base_capital_floor)
+        candidate_withdraw = round(surplus_above_floor * WITHDRAW_PROFIT_RATIO, 2)
+
+        if withdrawable_pool + candidate_withdraw < MIN_WITHDRAWABLE_USD:
+            new_trading = round(total_after_trade, 2)
+            return new_trading, round(withdrawable_pool, 2), 0.0, round(pnl_usd, 2)
+
+        to_withdraw = min(round(pnl_usd, 2), candidate_withdraw)
+        to_reinvest = round(pnl_usd - to_withdraw, 2)
+
+        new_trading = round(trading_balance + to_reinvest, 2)
+        new_pool = round(withdrawable_pool + to_withdraw, 2)
+        return new_trading, new_pool, to_withdraw, to_reinvest

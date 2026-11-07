@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 sys.path.append(os.path.dirname(__file__))
 
@@ -30,7 +31,8 @@ logging.basicConfig(
 logger = logging.getLogger("cashbot.main")
 
 WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-MIN_SCORE_FOR_TRADE = 75.0
+MAX_DYNAMIC_PAIRS = 6
+MIN_SCORE_FOR_TRADE = 65.0
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
 
@@ -53,16 +55,36 @@ class TradingEngine:
             f"Pool para Saque: ${ledger['withdrawable_pool']:,.2f}"
         )
 
-        open_trade = self.db.get_open_trade()
-        if open_trade and not self._try_settle_open_trade(open_trade, ledger):
-            logger.info("Ordem OCO ainda em aberto no livro da exchange. Nenhuma nova ordem será aberta hoje.")
+        open_trades = self.db.get_open_trades()
+        self._check_all_open_trades(open_trades)
+
+        remaining_open = self.db.get_open_trades()
+        updated_ledger = self.db.get_ledger()
+        free_capital = self._compute_free_capital(updated_ledger, remaining_open)
+
+        if len(remaining_open) >= 3 or free_capital < 12.0:
+            logger.info(
+                f"Carteira com {len(remaining_open)} posição(ões) ativa(s) e "
+                f"${free_capital:,.2f} livre. Aguardando encerramento de ordens para novas compras."
+            )
             return
 
-        updated_ledger = self.db.get_ledger()
         deliberations = self._evaluate_watchlist(force_opportunity)
         self.db.save_consensus_logs_batch([d.to_dict() for d in deliberations])
 
-        self._decide_and_execute(deliberations, updated_ledger["trading_balance"])
+        self._decide_and_execute(deliberations, updated_ledger, remaining_open)
+
+    def _check_all_open_trades(self, open_trades: List[Dict[str, Any]]) -> None:
+        """Verifica todas as ordens OCO abertas na carteira e encerra quantas tiverem atingido TP ou SL."""
+        for trade in open_trades:
+            current_ledger = self.db.get_ledger()
+            self._try_settle_open_trade(trade, current_ledger)
+
+    @staticmethod
+    def _compute_free_capital(ledger: Dict[str, float], open_trades: List[Dict[str, Any]]) -> float:
+        total_available = ledger["trading_balance"] + ledger["withdrawable_pool"]
+        locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
+        return max(0.0, round(total_available - locked_usd, 2))
 
     def _try_settle_open_trade(self, open_trade: Dict[str, Any], ledger: Dict[str, float]) -> bool:
         """
@@ -98,8 +120,11 @@ class TradingEngine:
         logger.info(f"Posição fechada com status {status}! PnL: ${pnl_usd:+,.2f}")
         self.db.close_trade(open_trade["id"], exit_price, status, pnl_usd)
 
-        to_withdraw, to_reinvest = self._split_profit(pnl_usd)
-        new_trading, new_pool = self._calculate_updated_balances(ledger, pnl_usd, to_withdraw, to_reinvest)
+        new_trading, new_pool, to_withdraw, to_reinvest = self.risk_agent.allocate_trade_pnl(
+            trading_balance=ledger["trading_balance"],
+            withdrawable_pool=ledger["withdrawable_pool"],
+            pnl_usd=pnl_usd,
+        )
         self.db.update_ledger(new_trading, new_pool)
 
         outcome = "TP" if status == "CLOSED_TP" else "SL"
@@ -111,38 +136,21 @@ class TradingEngine:
             pnl_usd=pnl_usd,
             to_withdraw=to_withdraw,
             to_reinvest=to_reinvest,
-            is_simulated=self.exchange.simulation_mode
+            is_simulated=self.exchange.simulation_mode,
+            new_trading_balance=new_trading,
+            new_withdrawable_pool=new_pool,
         )
         logger.info("Posição encerrada e notificada. Prosseguindo para nova varredura de mercado...")
 
-    @staticmethod
-    def _split_profit(pnl_usd: float) -> Tuple[float, float]:
-        if pnl_usd <= 0:
-            return 0.0, 0.0
-        half = pnl_usd * 0.50
-        return half, half
-
-    @staticmethod
-    def _calculate_updated_balances(
-        ledger: Dict[str, float],
-        pnl_usd: float,
-        to_withdraw: float,
-        to_reinvest: float
-    ) -> Tuple[float, float]:
-        trading_balance = ledger["trading_balance"]
-        withdrawable_pool = ledger["withdrawable_pool"]
-        if pnl_usd > 0:
-            return trading_balance + to_reinvest, withdrawable_pool + to_withdraw
-        return max(0.0, trading_balance + pnl_usd), withdrawable_pool
-
     def _evaluate_watchlist(self, force_opportunity: bool) -> List[Deliberation]:
-        """Pré-carrega contexto de mercado em lote (sem N+1) e delibera sobre cada ativo."""
-        self.sent_agent.prefetch_market_context(WATCHLIST)
-        return [self._deliberate_symbol(symbol, force_opportunity) for symbol in WATCHLIST]
+        """Descobre a Watchlist Dinâmica na Binance, pré-carrega notícias em lote e delibera."""
+        dynamic_pairs = self.exchange.discover_dynamic_watchlist(max_pairs=MAX_DYNAMIC_PAIRS)
+        self.sent_agent.prefetch_market_context(dynamic_pairs)
+        return [self._deliberate_symbol(symbol, force_opportunity) for symbol in dynamic_pairs]
 
     def _deliberate_symbol(self, symbol: str, force_opportunity: bool) -> Deliberation:
         logger.info(f"Analisando par {symbol}...")
-        candles = self.exchange.fetch_daily_candles(symbol, limit=60)
+        candles = self.exchange.fetch_daily_candles(symbol, limit=250)
         raw_ind = self.risk_agent.compute_indicators(candles)
         indicators = TechnicalIndicators(**raw_ind)
 
@@ -165,7 +173,11 @@ class TradingEngine:
             sent_score=sent_score,
             final_score=final_score,
             veto=veto,
-            summary=summary_text
+            summary=summary_text,
+            tech_reason=str(tech_res["reasoning"]),
+            sent_reason=str(sent_res["reasoning"]),
+            ai_stop_loss_pct=float(tech_res.get("stop_loss_pct", 0.0)),
+            ai_take_profit_pct=float(tech_res.get("take_profit_pct", 0.0)),
         )
 
     @staticmethod
@@ -184,34 +196,93 @@ class TradingEngine:
         veto = bool(tech_res["veto"] or sent_res["veto"])
         return tech_score, sent_score, final_score, veto
 
-    def _decide_and_execute(self, deliberations: List[Deliberation], trading_balance: float) -> None:
-        valid_candidates = [d for d in deliberations if d.is_approved(MIN_SCORE_FOR_TRADE)]
+    def _decide_and_execute(
+        self,
+        deliberations: List[Deliberation],
+        ledger: Dict[str, float],
+        open_trades: List[Dict[str, Any]]
+    ) -> None:
+        open_symbols = {str(t["symbol"]) for t in open_trades}
+        valid_candidates = [
+            d for d in deliberations
+            if d.is_approved(MIN_SCORE_FOR_TRADE) and d.symbol not in open_symbols
+        ]
         if not valid_candidates:
-            self._notify_no_opportunity(deliberations)
+            self._notify_no_opportunity(deliberations, ledger)
             return
 
-        best_candidate = max(valid_candidates, key=lambda x: x.final_score)
-        self._open_position_for_candidate(best_candidate, trading_balance)
+        ranked_candidates = sorted(valid_candidates, key=lambda x: x.final_score, reverse=True)
+        total_capital = self._reinvest_unwithdrawn_pool(ledger)
+        locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
+        free_capital = max(0.0, round(total_capital - locked_usd, 2))
 
-    def _notify_no_opportunity(self, deliberations: List[Deliberation]) -> None:
-        logger.info("Nenhum par atingiu a pontuação mínima de 75 ou houve veto aplicado.")
-        best = max(deliberations, key=lambda x: x.final_score)
+        allocations = self.risk_agent.split_capital_for_candidates(
+            free_balance=free_capital,
+            scores=[c.final_score for c in ranked_candidates],
+            open_positions_count=len(open_trades),
+        )
+        for candidate, allocated_usd in zip(ranked_candidates, allocations):
+            self._open_position_for_candidate(candidate, deliberations, allocated_usd)
+
+    def _reinvest_unwithdrawn_pool(self, ledger: Dict[str, float]) -> float:
+        """
+        Se o usuário não sacou o valor sugerido até a próxima oportunidade de compra,
+        reincorpora o saldo disponível ao Capital de Giro para maximizar os juros compostos.
+        """
+        combined_ledger_usd = round(ledger["trading_balance"] + ledger["withdrawable_pool"], 2)
+        effective_usd = self.exchange.fetch_free_usdt_balance(combined_ledger_usd)
+
+        if ledger["withdrawable_pool"] > 0:
+            logger.info(
+                f"Reinvestindo saldo não sacado (${ledger['withdrawable_pool']:,.2f}) "
+                f"no Capital de Giro -> Força Total: ${effective_usd:,.2f}"
+            )
+            self.db.update_ledger(effective_usd, 0.0)
+
+        return effective_usd
+
+    def _notify_no_opportunity(self, deliberations: List[Deliberation], ledger: Dict[str, float]) -> None:
+        logger.info(f"Nenhum par atingiu a pontuação mínima de {MIN_SCORE_FOR_TRADE} ou houve veto aplicado.")
+        ranked = sorted(deliberations, key=lambda x: x.final_score, reverse=True)
+        best = ranked[0]
+        ranking_lines = [self._format_coin_rank_line(d) for d in ranked]
         self.notifier.notify_daily_analysis(
             symbol=best.symbol,
             tech_score=best.tech_score,
             sent_score=best.sent_score,
             final_score=best.final_score,
             veto=best.veto,
-            action="AGUARDAR (Sem Oportunidade Aprovada)",
-            details=best.summary
+            action="AGUARDAR",
+            details=best.summary,
+            ranking_lines=ranking_lines,
+            tech_reason=best.tech_reason,
+            sent_reason=best.sent_reason,
+            trading_balance=ledger["trading_balance"],
+            withdrawable_pool=ledger["withdrawable_pool"],
         )
 
-    def _open_position_for_candidate(self, candidate: Deliberation, trading_balance: float) -> None:
+    @staticmethod
+    def _format_coin_rank_line(d: Deliberation) -> str:
+        coin = d.symbol.split("/")[0]
+        veto_tag = " 🚫 <i>(Risco alto)</i>" if d.veto else ""
+        return f"• <b>{coin}:</b> {d.final_score:.0f}/100 pts{veto_tag}"
+
+    def _open_position_for_candidate(
+        self,
+        candidate: Deliberation,
+        deliberations: List[Deliberation],
+        trading_balance: float
+    ) -> None:
         symbol = candidate.symbol
         entry_price = candidate.indicators.current_price
         atr14 = candidate.indicators.atr14
 
-        stop_loss, take_profit, stop_dist = self.risk_agent.calculate_levels(entry_price, atr14)
+        stop_loss, take_profit, stop_dist = self.risk_agent.calculate_levels(
+            entry_price=entry_price,
+            atr14=atr14,
+            ai_stop_pct=candidate.ai_stop_loss_pct,
+            ai_tp_pct=candidate.ai_take_profit_pct,
+        )
         quantity = self.risk_agent.calculate_position_size(trading_balance, entry_price, stop_dist)
         if quantity <= 0:
             logger.warning(f"Quantidade calculada inválida para {symbol} (Saldo insuficiente).")
@@ -232,13 +303,18 @@ class TradingEngine:
         )
         logger.info(f"Trade registrado no banco com ID #{trade_id}.")
 
+        ranked = sorted(deliberations, key=lambda x: x.final_score, reverse=True)
+        ranking_lines = [self._format_coin_rank_line(d) for d in ranked]
         self.notifier.notify_order_placed(
             symbol=symbol,
             entry_price=entry_price,
             qty=quantity,
             sl_price=stop_loss,
             tp_price=take_profit,
-            is_simulated=self.exchange.simulation_mode
+            is_simulated=self.exchange.simulation_mode,
+            ranking_lines=ranking_lines,
+            tech_reason=candidate.tech_reason,
+            sent_reason=candidate.sent_reason,
         )
         logger.info("=== CICLO OPERACIONAL CONCLUÍDO COM SUCESSO ===")
 

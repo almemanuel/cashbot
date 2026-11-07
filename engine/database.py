@@ -173,9 +173,14 @@ class Database:
             cur.execute(query, (trading_balance, withdrawable_pool, now_str))
 
     def get_open_trade(self) -> Optional[Dict[str, Any]]:
-        """Retorna trade ativo com status 'OPEN_OCO' caso exista."""
+        """Retorna trade ativo mais recente com status 'OPEN_OCO' caso exista."""
         with self._session() as cur:
             return self._fetch_open_trade_in_cursor(cur)
+
+    def get_open_trades(self) -> List[Dict[str, Any]]:
+        """Retorna todas as posições simultâneas abertas ('OPEN_OCO') na carteira."""
+        with self._session() as cur:
+            return self._fetch_open_trades_in_cursor(cur)
 
     def save_trade(
         self,
@@ -275,9 +280,11 @@ class Database:
         eliminando as 4 conexões separadas por carregamento de tela.
         """
         with self._session() as cur:
+            open_trades = self._fetch_open_trades_in_cursor(cur)
             return {
                 "ledger": self._fetch_ledger_in_cursor(cur),
-                "open_trade": self._fetch_open_trade_in_cursor(cur),
+                "open_trade": open_trades[0] if open_trades else None,
+                "open_trades": open_trades,
                 "recent_trades": self._fetch_recent_trades_in_cursor(cur, trades_limit),
                 "recent_consensus": self._fetch_recent_consensus_in_cursor(cur, consensus_limit),
             }
@@ -291,11 +298,12 @@ class Database:
         return {"trading_balance": float(row[0]), "withdrawable_pool": float(row[1])}
 
     def _fetch_open_trade_in_cursor(self, cur) -> Optional[Dict[str, Any]]:
-        cur.execute("SELECT * FROM trades WHERE status = 'OPEN_OCO' ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-        if not row:
-            return None
-        return self._row_to_dict(cur, row)
+        trades = self._fetch_open_trades_in_cursor(cur)
+        return trades[0] if trades else None
+
+    def _fetch_open_trades_in_cursor(self, cur) -> List[Dict[str, Any]]:
+        cur.execute("SELECT * FROM trades WHERE status = 'OPEN_OCO' ORDER BY id DESC")
+        return self._rows_to_dicts(cur, cur.fetchall())
 
     def _fetch_recent_trades_in_cursor(self, cur, limit: int) -> List[Dict[str, Any]]:
         query = self._sql("SELECT * FROM trades ORDER BY id DESC LIMIT ?")
