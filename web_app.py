@@ -13,7 +13,7 @@ import json
 import socket
 import logging
 from typing import Dict, Any, Callable, List, Optional
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -148,6 +148,9 @@ class CashBotHandler(SimpleHTTPRequestHandler):
     def _handle_get_overview(self) -> None:
         if not self._require_auth():
             return
+        self._execute_route_safely(self._send_overview_payload, {})
+
+    def _send_overview_payload(self, _payload: Dict[str, Any]) -> None:
         db = Database()
         self._send_json(db.get_dashboard_overview(trades_limit=10, consensus_limit=10))
 
@@ -347,7 +350,7 @@ class CashBotHandler(SimpleHTTPRequestHandler):
 
 def run_server(port: int = 8080) -> None:
     server_address = ("0.0.0.0", port)
-    httpd = HTTPServer(server_address, CashBotHandler)
+    httpd = ThreadingHTTPServer(server_address, CashBotHandler)
     local_ip = get_local_ip()
 
     print("\n" + "=" * 60)

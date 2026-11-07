@@ -132,8 +132,8 @@ function showToast(message) {
   }, 3500);
 }
 
-// Atualização de dados da API
-async function refreshData() {
+// Atualização de dados da API (com retry automático caso o Render esteja reiniciando um deploy)
+async function refreshData(retryCount = 0) {
   const icon = document.getElementById('refreshIcon');
   if (icon) icon.classList.add('fa-spin');
 
@@ -143,14 +143,22 @@ async function refreshData() {
       showLoginModal();
       return;
     }
-    if (!res.ok) throw new Error('Falha ao obter dados');
+    if ((res.status === 502 || res.status === 503 || res.status === 504) && retryCount < 2) {
+      setTimeout(() => refreshData(retryCount + 1), 2500);
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     hideLoginModal();
     const data = await res.json();
     overviewData = data;
     renderData(data);
   } catch (err) {
+    if (retryCount < 1) {
+      setTimeout(() => refreshData(retryCount + 1), 2500);
+      return;
+    }
     console.error('Erro ao buscar dados:', err);
-    showToast('Erro ao sincronizar dados com o bot.');
+    showToast('Sincronizando com o servidor... tente novamente em instantes.');
   } finally {
     if (icon) setTimeout(() => icon.classList.remove('fa-spin'), 600);
   }

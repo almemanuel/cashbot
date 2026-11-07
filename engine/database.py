@@ -102,12 +102,16 @@ SQLITE_SCHEMA_SQL = [
 
 
 class Database:
+    _SCHEMA_INITIALIZED = False
+
     def __init__(self, connection_url: Optional[str] = None):
         self.connection_url = connection_url or os.getenv("DATABASE_URL")
         self.is_postgres = bool(
             self.connection_url and HAS_PSYCOPG2 and self.connection_url.startswith("postgres")
         )
-        self._init_db()
+        if not Database._SCHEMA_INITIALIZED:
+            self._init_db()
+            Database._SCHEMA_INITIALIZED = True
 
     @contextmanager
     def _session(self):
@@ -123,7 +127,7 @@ class Database:
 
     def _get_connection(self):
         if self.is_postgres:
-            return psycopg2.connect(self.connection_url)
+            return psycopg2.connect(self.connection_url, connect_timeout=10)
         conn = sqlite3.connect(SQLITE_PATH)
         conn.row_factory = sqlite3.Row
         return conn

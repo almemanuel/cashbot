@@ -1,5 +1,5 @@
 // CashBot PWA Service Worker
-const CACHE_NAME = 'cashbot-v1';
+const CACHE_NAME = 'cashbot-v2';
 const ASSETS = [
   '/',
   '/index.html',
@@ -27,9 +27,8 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Para requisições de API, sempre tenta rede primeiro
+  // Requisições de API passam direto pelo navegador sem interceptação do Service Worker
   if (event.request.url.includes('/api/')) {
-    event.respondWith(fetch(event.request));
     return;
   }
 

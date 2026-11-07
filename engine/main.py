@@ -35,11 +35,12 @@ WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 MAX_DYNAMIC_PAIRS = 6
 MAX_OPEN_SLOTS = 4
 MIN_SCORE_FOR_TRADE = 63.0
-TACTICAL_PROFIT_MIN_PCT = 0.35
+TACTICAL_PROFIT_MIN_PCT = 0.55
 TACTICAL_HOLD_MINUTES = 45.0
 CATASTROPHE_STOP_PCT = 7.5
 TIME_STOP_MINUTES = 48.0 * 60.0
 TIME_STOP_MAX_LOSS_PCT = 2.0
+ROUND_TRIP_FEE_RATE = 0.002
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
 
@@ -304,6 +305,7 @@ class TradingEngine:
 
         new_tp = round(current_price * 1.008, 6 if current_price < 1.0 else 4)
         self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
+        self.exchange.update_take_profit_order(str(open_trade["symbol"]), float(open_trade["quantity"]), new_tp)
         logger.info(
             f"Tendência de alta forte em {open_trade['symbol']} (Score {delib.final_score:.1f}, RSI {ind.rsi14:.1f})! "
             f"Segurando venda e subindo Take Profit para ${new_tp} (+0.8%)."
@@ -408,11 +410,17 @@ class TradingEngine:
     ) -> None:
         entry_price = float(open_trade["entry_price"])
         qty = float(open_trade["quantity"])
-        pnl_usd = (exit_price - entry_price) * qty
+        gross_pnl = (exit_price - entry_price) * qty
+        fee_usd = ((entry_price * qty) + (exit_price * qty)) * (ROUND_TRIP_FEE_RATE / 2.0)
+        pnl_usd = round(gross_pnl - fee_usd, 2)
         prev_total = round(float(ledger["trading_balance"]) + float(ledger["withdrawable_pool"]), 2)
         unrecovered_before = self.db.get_unrecovered_loss_usd()
 
-        logger.info(f"Posição fechada com status {status} ({outcome_reason})! PnL: ${pnl_usd:+,.2f}")
+        self.exchange.execute_exit_order(str(open_trade["symbol"]), qty)
+        logger.info(
+            f"Posição fechada com status {status} ({outcome_reason})! "
+            f"PnL Líquido (pós-taxa Binance): ${pnl_usd:+,.2f} (Bruto: ${gross_pnl:+,.2f})"
+        )
         self.db.close_trade(open_trade["id"], exit_price, status, pnl_usd)
 
         new_trading, new_pool, to_withdraw, to_reinvest = self.risk_agent.allocate_trade_pnl(

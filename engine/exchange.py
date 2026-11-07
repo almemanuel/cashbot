@@ -350,3 +350,42 @@ class ExchangeClient:
         if stop_loss > 0 and current_price <= stop_loss:
             return {"status": "CLOSED_SL", "exit_price": current_price, "current_price": current_price}
         return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
+
+    def execute_exit_order(self, symbol: str, quantity: float) -> None:
+        """
+        Em modo real, cancela eventual ordem limit pendente do par e executa venda imediata a mercado
+        (usado em Realização Tática, Stop Temporal de 48h ou Disjuntor de Catástrofe).
+        """
+        if self.simulation_mode or not self.exchange:
+            return
+        try:
+            self._cancel_open_orders_for_symbol(symbol)
+            self.exchange.create_market_sell_order(symbol, quantity)
+            logger.info(f"Venda a mercado executada na Binance para {symbol} (qtd={quantity}).")
+        except Exception as e:
+            logger.warning(f"Aviso ao executar saída a mercado na Binance ({symbol}): {e}")
+
+    def update_take_profit_order(self, symbol: str, quantity: float, new_take_profit: float) -> None:
+        """
+        Em modo real, substitui a ordem limit de venda pelo novo preço de Take Profit
+        quando o robô decide surfar uma tendência de alta mais longa (Trailing TP).
+        """
+        if self.simulation_mode or not self.exchange:
+            return
+        try:
+            self._cancel_open_orders_for_symbol(symbol)
+            self.exchange.create_order(
+                symbol=symbol,
+                type="limit",
+                side="sell",
+                amount=quantity,
+                price=new_take_profit,
+            )
+            logger.info(f"Ordem Limit de Take Profit atualizada na Binance ({symbol} -> ${new_take_profit}).")
+        except Exception as e:
+            logger.warning(f"Aviso ao atualizar ordem de Take Profit na Binance ({symbol}): {e}")
+
+    def _cancel_open_orders_for_symbol(self, symbol: str) -> None:
+        open_orders = self.exchange.fetch_open_orders(symbol)
+        for order in open_orders:
+            self.exchange.cancel_order(order["id"], symbol)

@@ -17,6 +17,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: cashbot-trading-engine
+  cancel-in-progress: false
+
 jobs:
   trade_cycle:
     runs-on: ubuntu-latest
