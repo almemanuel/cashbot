@@ -37,14 +37,16 @@ Para cada moeda, o motor calcula 250 velas de **15 minutos** e entrega ao Comit�
 
 ---
 
-### 4. Gestão Diária de Lucros e Janela de Saque (`22h às 23h BRT`)
+### 4. Gestão Diária de Lucros, Pausa de 1h e Relatórios no Telegram (`22h às 23h BRT`)
 Toda vez que uma posição fecha no lucro (`CLOSED_TP`), o `RiskAgent` aplica:
 1. **Distribuição Ao Longo do Dia (60% Giro / 40% Saque):**
    * **60%** do lucro é reinvestido imediatamente no **Capital de Giro** (bola de neve intradiária).
-   * **40%** vai acumulando na caixinha **Disponível para Saque (Pix)**, ficando protegido e reservado durante todo o dia para você usar se quiser.
-2. **Janela Diária de Saque (`WITHDRAW_WINDOW_START_BRT=22` até `WITHDRAW_WINDOW_END_BRT=23` no `.env`):**
-   * Você tem até as **23h (Horário de Brasília)** para decidir sacar o lucro acumulado no dia.
-   * **Passou das 23h BRT:** Se você não sacou, o robô entende que você quis deixar render e **reincorpora automaticamente 100% do saldo de saque ao Capital de Giro** para investir tudo novamente!
+   * **40%** vai acumulando na caixinha **Guardado para Saque Hoje**, ficando protegido durante o dia.
+2. **Mensagens Limpas e Completas no Telegram (Zero Dependência de Front-End):**
+   * Em **toda compra ou venda**, a mensagem traz o **Patrimônio Anterior**, **Patrimônio Atual**, **Lucro da Rodada**, **Total Operando nas Moedas**, **Caixa Livre** e **Guardado p/ Saque**, além de explicar o motivo da decisão em linguagem simples e direta para leigos (sem siglas técnicas).
+3. **Janela de Pausa e Fechamento Diário (`WITHDRAW_WINDOW_START_BRT=22` até `WITHDRAW_WINDOW_END_BRT=23` no `.env`):**
+   * **Às 22h BRT (Início da Janela):** O robô **pausa todas as compras e vendas por 1 hora** para não bagunçar o saldo e envia no Telegram o **Fechamento Consolidado do Dia** (Patrimônio no Início do Dia, Patrimônio no Fim do Dia, Lucro Total Conquistado Hoje, resumo das operações e se o valor reservado atingiu o mínimo de **US$ 10,00** para saque na Binance).
+   * **Às 23h BRT (Fim da Janela e Reinício):** Se você não sacar até as 23h, o robô **reincorpora automaticamente 100% desse lucro ao Capital de Giro**, sincroniza o saldo real da conta na Binance e envia uma mensagem avisando que está iniciando o novo ciclo diário considerando o capital total `X` disponível em conta!
 
 ---
 

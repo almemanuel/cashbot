@@ -53,6 +53,10 @@ class TradingEngine:
     def run_cycle(self, force_opportunity: bool = False, bypass_cooldown: bool = False) -> None:
         """Executa um ciclo completo de Day Trade Quantitativo (15m) com IA sempre ativa."""
         logger.info("=== INICIANDO CICLO DAY TRADE QUANTITATIVO (15M) ===")
+        if self._handle_withdraw_pause_window(force_opportunity):
+            return
+
+        self._handle_daily_restart_if_due()
         ledger = self.db.get_ledger()
         logger.info(
             f"Saldos atuais -> Capital de Giro: ${ledger['trading_balance']:,.2f} | "
@@ -77,6 +81,55 @@ class TradingEngine:
             return
 
         self._decide_and_execute(deliberations, updated_ledger, remaining_open, notify_wait=bypass_cooldown)
+
+    def _handle_withdraw_pause_window(self, force_opportunity: bool) -> bool:
+        """
+        Durante a janela de 1h de saque (ex: 22h às 23h BRT), congela compras e vendas
+        e envia o consolidado diário uma única vez.
+        """
+        if force_opportunity or not self._is_in_withdraw_pause_window_brt():
+            return False
+
+        open_trades = self.db.get_open_trades()
+        self._reconcile_exchange_cash_flow(self.db.get_ledger(), open_trades)
+        start_h = self._withdraw_start_hour_brt()
+        end_h = self._withdraw_end_hour_brt()
+
+        if not self.db.has_system_marker_since("SYSTEM/EOD", minutes=90):
+            stats = self.db.get_daily_summary_stats()
+            self.notifier.notify_end_of_day_summary(stats, start_hour=start_h, end_hour=end_h)
+            self.db.save_system_marker("SYSTEM/EOD", f"Consolidado diário enviado às {start_h}h BRT")
+
+        logger.info(
+            f"Janela diária de saque ativa ({start_h}h às {end_h}h BRT): "
+            f"Operações pausadas por 1h aguardando decisão de saque do usuário."
+        )
+        return True
+
+    def _handle_daily_restart_if_due(self) -> None:
+        """
+        Ao encerrar a janela de saque (23h BRT), sincroniza a carteira na Binance,
+        reincorpora eventual lucro não sacado ao giro e avisa o capital inicial do novo ciclo.
+        """
+        if not self._is_restart_hour_brt() or self.db.has_system_marker_since("SYSTEM/RESTART", minutes=90):
+            return
+
+        open_trades = self.db.get_open_trades()
+        raw_ledger = self.db.get_ledger()
+        pool_before = float(raw_ledger.get("withdrawable_pool", 0.0))
+        updated_ledger = self._reconcile_exchange_cash_flow(raw_ledger, open_trades)
+        invested_usd = round(sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades), 2)
+        free_cash = self._compute_free_capital(updated_ledger, open_trades)
+        total_capital = round(float(updated_ledger["trading_balance"]) + float(updated_ledger["withdrawable_pool"]), 2)
+
+        self.notifier.notify_daily_restart(
+            total_capital=total_capital,
+            free_cash=free_cash,
+            invested_usd=invested_usd,
+            open_count=len(open_trades),
+            swept_pool=pool_before,
+        )
+        self.db.save_system_marker("SYSTEM/RESTART", f"Reinício diário notificado com capital ${total_capital:,.2f}")
 
     def _check_all_open_trades(
         self,
@@ -124,8 +177,22 @@ class TradingEngine:
         return {"trading_balance": new_trading, "withdrawable_pool": 0.0}
 
     @staticmethod
+    def _withdraw_start_hour_brt() -> int:
+        return int(os.getenv("WITHDRAW_WINDOW_START_BRT", "22"))
+
+    @staticmethod
     def _withdraw_end_hour_brt() -> int:
         return int(os.getenv("WITHDRAW_WINDOW_END_BRT", "23"))
+
+    @classmethod
+    def _is_in_withdraw_pause_window_brt(cls) -> bool:
+        brt_now = datetime.now(timezone.utc) - timedelta(hours=3)
+        return cls._withdraw_start_hour_brt() <= brt_now.hour < cls._withdraw_end_hour_brt()
+
+    @classmethod
+    def _is_restart_hour_brt(cls) -> bool:
+        brt_now = datetime.now(timezone.utc) - timedelta(hours=3)
+        return brt_now.hour == cls._withdraw_end_hour_brt()
 
     @classmethod
     def _is_past_withdraw_window_brt(cls) -> bool:
@@ -280,6 +347,7 @@ class TradingEngine:
         entry_price = float(open_trade["entry_price"])
         qty = float(open_trade["quantity"])
         pnl_usd = (exit_price - entry_price) * qty
+        prev_total = round(float(ledger["trading_balance"]) + float(ledger["withdrawable_pool"]), 2)
 
         logger.info(f"Posição fechada com status {status}! PnL: ${pnl_usd:+,.2f}")
         self.db.close_trade(open_trade["id"], exit_price, status, pnl_usd)
@@ -290,6 +358,10 @@ class TradingEngine:
             pnl_usd=pnl_usd,
         )
         self.db.update_ledger(new_trading, new_pool)
+        remaining_open = self.db.get_open_trades()
+        invested_usd = round(sum(float(t["entry_price"]) * float(t["quantity"]) for t in remaining_open), 2)
+        free_cash = max(0.0, round(new_trading - invested_usd, 2))
+        current_total = round(new_trading + new_pool, 2)
 
         outcome = "TP" if status == "CLOSED_TP" else "SL"
         self.notifier.notify_order_closed(
@@ -303,6 +375,10 @@ class TradingEngine:
             is_simulated=self.exchange.simulation_mode,
             new_trading_balance=new_trading,
             new_withdrawable_pool=new_pool,
+            prev_portfolio_total=prev_total,
+            current_portfolio_total=current_total,
+            invested_total=invested_usd,
+            free_cash=free_cash,
         )
         logger.info("Posição encerrada e notificada. Prosseguindo para nova varredura de mercado...")
 
@@ -467,6 +543,12 @@ class TradingEngine:
 
         ranked = sorted(deliberations, key=lambda x: x.final_score, reverse=True)
         ranking_lines = [self._format_coin_rank_line(d) for d in ranked]
+        cur_ledger = self.db.get_ledger()
+        all_open = self.db.get_open_trades()
+        invested_usd = round(sum(float(t["entry_price"]) * float(t["quantity"]) for t in all_open), 2)
+        free_cash = max(0.0, round(float(cur_ledger["trading_balance"]) - invested_usd, 2))
+        total_portfolio = round(float(cur_ledger["trading_balance"]) + float(cur_ledger["withdrawable_pool"]), 2)
+
         self.notifier.notify_order_placed(
             symbol=symbol,
             entry_price=entry_price,
@@ -477,6 +559,11 @@ class TradingEngine:
             ranking_lines=ranking_lines,
             tech_reason=candidate.tech_reason,
             sent_reason=candidate.sent_reason,
+            prev_portfolio_total=total_portfolio,
+            current_portfolio_total=total_portfolio,
+            invested_total=invested_usd,
+            free_cash=free_cash,
+            withdrawable_pool=float(cur_ledger["withdrawable_pool"]),
         )
         logger.info("=== CICLO OPERACIONAL CONCLUÍDO COM SUCESSO ===")
 

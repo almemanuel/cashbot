@@ -301,6 +301,65 @@ class Database:
         )
         return cur.fetchone() is not None
 
+    def has_system_marker_since(self, marker_symbol: str, minutes: int = 90) -> bool:
+        """Verifica se um marcador de sistema (ex: SYSTEM/EOD ou SYSTEM/RESTART) já foi registrado na janela."""
+        with self._session() as cur:
+            return self._check_system_marker_in_cursor(cur, marker_symbol, minutes)
+
+    def _check_system_marker_in_cursor(self, cur, marker_symbol: str, minutes: int) -> bool:
+        if self.is_postgres:
+            cur.execute(
+                "SELECT 1 FROM consensus_logs "
+                "WHERE symbol = %s AND created_at >= NOW() - (%s * INTERVAL '1 minute') LIMIT 1",
+                (marker_symbol, int(minutes)),
+            )
+            return cur.fetchone() is not None
+
+        cur.execute(
+            "SELECT 1 FROM consensus_logs "
+            "WHERE symbol = ? AND created_at >= datetime('now', ?) LIMIT 1",
+            (marker_symbol, f"-{int(minutes)} minutes"),
+        )
+        return cur.fetchone() is not None
+
+    def save_system_marker(self, marker_symbol: str, note: str) -> None:
+        """Grava um marcador de controle (como aviso de fim de dia ou reinício) no banco."""
+        self.save_consensus_log(
+            symbol=marker_symbol,
+            tech_score=100.0,
+            sent_score=100.0,
+            final_score=100.0,
+            veto_applied=False,
+            reasoning_summary=note,
+        )
+
+    def get_daily_summary_stats(self) -> Dict[str, Any]:
+        """Consolida os números das últimas 24h em uma única sessão para o relatório das 22h BRT."""
+        with self._session() as cur:
+            ledger = self._fetch_ledger_in_cursor(cur)
+            open_trades = self._fetch_open_trades_in_cursor(cur)
+            recent_trades = self._fetch_recent_trades_in_cursor(cur, limit=50)
+
+            invested_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
+            current_total = round(float(ledger["trading_balance"]) + float(ledger["withdrawable_pool"]), 2)
+            free_cash = max(0.0, round(float(ledger["trading_balance"]) - invested_usd, 2))
+
+            closed_trades = [t for t in recent_trades if str(t.get("status", "")).startswith("CLOSED_")]
+            today_pnl = round(sum(float(t.get("pnl_usd", 0.0)) for t in closed_trades), 2)
+            start_total = round(current_total - today_pnl, 2)
+
+            return {
+                "start_total": start_total,
+                "current_total": current_total,
+                "trading_balance": round(float(ledger["trading_balance"]), 2),
+                "withdrawable_pool": round(float(ledger["withdrawable_pool"]), 2),
+                "invested_usd": round(invested_usd, 2),
+                "free_cash": free_cash,
+                "open_count": len(open_trades),
+                "closed_count": len(closed_trades),
+                "today_pnl": today_pnl,
+            }
+
     def get_dashboard_overview(self, trades_limit: int = 10, consensus_limit: int = 10) -> Dict[str, Any]:
         """
         Carrega todos os dados do painel em uma única conexão ao banco,
@@ -349,7 +408,9 @@ class Database:
         return self._rows_to_dicts(cur, cur.fetchall())
 
     def _fetch_recent_consensus_in_cursor(self, cur, limit: int) -> List[Dict[str, Any]]:
-        query = self._sql("SELECT * FROM consensus_logs ORDER BY id DESC LIMIT ?")
+        query = self._sql(
+            "SELECT * FROM consensus_logs WHERE symbol NOT LIKE 'SYSTEM/%' ORDER BY id DESC LIMIT ?"
+        )
         cur.execute(query, (int(limit),))
         return self._rows_to_dicts(cur, cur.fetchall())
 

@@ -352,19 +352,20 @@ Critérios para Giro Rápido:
 1. Dê nota alta (70 a 92) se houver narrativa positiva de curto prazo, entrada de fluxo comprador, interesse do mercado ou ausência de notícias negativas travando o ativo.
 2. Veto (veto: true) IMEDIATO se as manchetes relatarem hack, exploit, parada na rede (outage/halt), despejo massivo (token unlock/dump) ou processo grave contra {symbol}.
 3. Se o mercado estiver neutro/cauteloso mas sem risco específico contra {symbol}, atribua nota moderada (60 a 72) para não travar bons setups gráficos de repique.
+4. REGRA DE LINGUAGEM PARA LEIGOS NO CAMPO `reasoning`:
+   - Escreva em **1 frase curta, simples e direta para um investidor leigo**, sem termos técnicos difíceis (como "macro", "ETFs", "sistêmico", "repique"). Diga de forma clara se as notícias do dia estão positivas ou tranquilas para a moeda subir.
 
 Responda EXCLUSIVAMENTE em formato JSON com o schema:
 {{
   "score": <número float 0-100>,
   "veto": <true ou false>,
-  "reasoning": "<explicação direta de até 2 frases em português sobre o impacto das notícias no curto prazo>"
+  "reasoning": "<1 frase simples e amigável em português para leigos sobre o clima das notícias da moeda>"
 }}
 """
 
     def _heuristic_analysis(self, symbol: str, fng: Dict[str, Any], headlines: Optional[List[str]] = None) -> Dict[str, Any]:
         """Análise de contingência combinando Fear & Greed ao vivo e varredura léxica das manchetes."""
         val = int(fng["value"])
-        classification = str(fng["classification"])
         collection = HeadlineCollection(headlines or [])
 
         critical_hit = collection.find_first_matching(CRITICAL_VETO_KEYWORDS)
@@ -372,7 +373,7 @@ Responda EXCLUSIVAMENTE em formato JSON com o schema:
             return AgentVerdict(
                 score=15.0,
                 veto=True,
-                reasoning=f"VETO DE NOTÍCIA CRÍTICA em {symbol}: '{critical_hit[:90]}...' (F&G: {val})."
+                reasoning=f"Notícia de alerta detectada em {symbol}, melhor ficar de fora por segurança."
             ).to_dict()
 
         base_score = self._compute_fng_base_score(val)
@@ -383,7 +384,7 @@ Responda EXCLUSIVAMENTE em formato JSON com o schema:
         return AgentVerdict(
             score=round(final_score, 2),
             veto=val < 20,
-            reasoning=f"F&G em {val} ({classification}). {news_summary}"
+            reasoning=news_summary
         ).to_dict()
 
     @staticmethod
@@ -406,11 +407,12 @@ Responda EXCLUSIVAMENTE em formato JSON com o schema:
     @staticmethod
     def _format_news_summary(collection: HeadlineCollection, news_delta: float) -> str:
         if collection.is_empty():
-            return "Sem manchetes atípicas nas últimas 24h."
-        top_headline = collection.top(1)[0][:82]
-        tone = SentimentAgent._resolve_tone_label(news_delta)
-        count = len(collection.top(10))
-        return f"Noticiário {tone} ({count} manchetes; destaque: \"{top_headline}...\")."
+            return "Noticiário tranquilo e sem nenhum alerta negativo para a moeda hoje."
+        if news_delta > 0:
+            return "As notícias recentes sobre a moeda são otimistas e ajudam na valorização."
+        if news_delta < 0:
+            return "O mercado está um pouco cauteloso hoje, mas sem nenhum problema grave com a moeda."
+        return "Noticiário calmo e sem riscos para operar no curto prazo."
 
     @staticmethod
     def _resolve_tone_label(news_delta: float) -> str:

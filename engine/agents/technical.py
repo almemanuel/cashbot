@@ -187,6 +187,8 @@ Técnicas de Day Trade Quantitativo a aplicar:
    - Escolha um alvo curto e rápido (ex: `0.9%` a `1.8%`) posicionado antes da resistência imediata / Banda de Bollinger Superior para realizar lucro rápido no próximo ciclo de 15 minutos!
 3. VETO DE COMPRA DE TOPO (`veto: true` ou nota < 55):
    - Jamais compre ativo já esticado acima da Banda de Bollinger Superior com RSI > 72 (exaustão de topo).
+4. REGRA DE LINGUAGEM PARA LEIGOS NO CAMPO `reasoning`:
+   - Embora você faça toda a análise matemática acima, escreva o campo `reasoning` em **1 frase curta, simples e humana para um investidor leigo**, SEM usar siglas técnicas (`VWAP`, `EMA20`, `RSI`, `Bollinger`, `ATR`). Exemplo: "O preço deu uma recuada ficando barato e o volume de compras voltou a crescer com força, abrindo espaço para subir rápido."
 
 Responda EXCLUSIVAMENTE em formato JSON com o seguinte schema:
 {{
@@ -194,7 +196,7 @@ Responda EXCLUSIVAMENTE em formato JSON com o seguinte schema:
   "veto": <true ou false>,
   "stop_loss_pct": <percentual técnico de referência entre 0.8 e 1.8>,
   "take_profit_pct": <percentual de alvo curto de day trade entre 0.8 e 2.2, ex: 1.2>,
-  "reasoning": "<explicação analítica em 1 ou 2 frases em português citando VWAP/Bollinger/Volume/RSI e o alvo curto escolhido>"
+  "reasoning": "<1 frase simples e direta em português para leigos, sem siglas técnicas, explicando por que a moeda tem chance de subir agora>"
 }}
 """
 
@@ -210,7 +212,7 @@ Responda EXCLUSIVAMENTE em formato JSON com o seguinte schema:
 
         raw_score = 50.0 + trend_delta + rsi_delta + flow_delta
         clamped_score = max(0.0, min(100.0, raw_score))
-        summary = " ".join(reasons) if reasons else "Indicadores 15m em consolidação neutra."
+        summary = " ".join(reasons[:2]) if reasons else "Preço estável aguardando maior fluxo comprador."
 
         return AgentVerdict(
             score=round(clamped_score, 2),
@@ -224,46 +226,46 @@ Responda EXCLUSIVAMENTE em formato JSON com o seguinte schema:
     def _evaluate_order_flow(ind: TechnicalIndicators, reasons: List[str]) -> float:
         bonus = 0.0
         if ind.is_above_vwap:
-            reasons.append("Preço sustentado acima da VWAP institucional.")
+            reasons.append("Os compradores estão dominando o preço nas últimas horas.")
             bonus += 6.0
         if ind.is_volume_breakout:
-            reasons.append(f"Entrada de volume comprador ({ind.volume_ratio:.1f}x a média).")
+            reasons.append("Entrou bastante dinheiro novo comprando a moeda agora.")
             bonus += 8.0
         if ind.is_near_bb_lower_support:
-            reasons.append("Toque na Banda de Bollinger Inferior (desconto tático para repique).")
+            reasons.append("O preço recuou até uma faixa barata que costuma atrair compradores.")
             bonus += 8.0
         return bonus
 
     @staticmethod
     def _evaluate_trend(ind: TechnicalIndicators, reasons: List[str]) -> float:
         if ind.is_strong_uptrend:
-            reasons.append("Fôlego comprador alinhado no curto prazo (Preço > EMA20 > EMA50).")
+            reasons.append("A moeda está em ritmo firme de valorização no curto prazo.")
             return 28.0
         if ind.is_above_ema50:
-            reasons.append("Preço sustentado acima da EMA50 com espaço para repique rápido.")
+            reasons.append("O preço se mantém firme com bom espaço para subir.")
             return 18.0
-        if ind.upside_to_7d_high_pct >= 4.0 and not ind.is_oversold:
-            reasons.append(f"Desconto tático com +{ind.upside_to_7d_high_pct:.1f}% de espaço até o topo de 7 dias.")
+        if ind.upside_to_7d_high_pct >= 2.0 and not ind.is_oversold:
+            reasons.append(f"Está com bom desconto em relação à máxima do dia (+{ind.upside_to_7d_high_pct:.1f}% de espaço).")
             return 12.0
         return -10.0
 
     @staticmethod
     def _evaluate_momentum(ind: TechnicalIndicators, reasons: List[str]) -> float:
         if ind.is_healthy_momentum:
-            reasons.append(f"RSI {ind.rsi14:.1f} com tração ideal para tiro curto.")
+            reasons.append("Tem fôlego saudável para subir sem estar cara demais.")
             return 16.0
         if ind.is_overbought:
-            reasons.append(f"RSI {ind.rsi14:.1f} esticado no curto prazo.")
+            reasons.append("Já subiu demais nas últimas horas e pode descansar.")
             return -20.0
         if ind.is_oversold:
-            reasons.append(f"RSI {ind.rsi14:.1f} em sobrevenda acentuada.")
+            reasons.append("Caiu bastante recentemente e ainda busca estabilidade.")
             return -15.0
         return 8.0
 
     @staticmethod
     def _should_veto(ind: TechnicalIndicators, reasons: List[str]) -> bool:
         if ind.is_oversold and not ind.is_above_ema50:
-            reasons.append("Veto: Queda forte sem sinal de exaustão vendedora.")
+            reasons.append("Momento de queda forte, melhor aguardar estabilizar.")
             return True
         return False
 

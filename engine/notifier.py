@@ -137,26 +137,31 @@ class TelegramNotifier:
         is_simulated: bool = False,
         ranking_lines: Optional[List[str]] = None,
         tech_reason: str = "",
-        sent_reason: str = ""
+        sent_reason: str = "",
+        prev_portfolio_total: float = 0.0,
+        current_portfolio_total: float = 0.0,
+        invested_total: float = 0.0,
+        free_cash: float = 0.0,
+        withdrawable_pool: float = 0.0
     ) -> bool:
-        """Notifica abertura de compra em linguagem simples e clara."""
+        """Notifica abertura de compra em linguagem limpa, simples e completa para leigos."""
         tag = "🧪 <b>[TESTE SIMULADO]</b>\n" if is_simulated else ""
         coin = symbol.split("/")[0]
         total_invested = entry_price * qty
         tp_pct = ((tp_price - entry_price) / entry_price) * 100.0 if entry_price > 0 else 0.0
-        sl_pct = ((entry_price - sl_price) / entry_price) * 100.0 if entry_price > 0 else 0.0
         expected_profit = (tp_price - entry_price) * qty
-        why_block = self._format_buy_reason_block(coin, tech_reason, sent_reason, ranking_lines)
+        why_block = self._format_buy_reason_block(coin, tech_reason, sent_reason)
+        portfolio_block = self._format_operation_portfolio_block(
+            prev_portfolio_total, current_portfolio_total, 0.0, invested_total, free_cash, withdrawable_pool
+        )
         msg = (
-            f"{tag}🟢 <b>CashBot — Nova Compra (Modo Perda Zero)!</b>\n\n"
+            f"{tag}🟢 <b>CashBot — Nova Compra Realizada!</b>\n\n"
             f"🪙 <b>Moeda comprada:</b> {symbol}\n"
-            f"💵 <b>Valor alocado:</b> US$ {total_invested:,.2f}\n"
-            f"🏷️ <b>Preço de entrada:</b> US$ {entry_price:,.4f}\n\n"
-            f"🛡️ <b>Estratégia Ativa:</b>\n"
-            f"• 🎯 <b>Alvo de Venda (Lucro):</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.1f}%</b> 👉 lucro de <b>+US$ {expected_profit:,.2f}</b>)\n"
-            f"• 💎 <b>Proteção Contra Quedas:</b> Hold Spot (<b>Perda Zero</b> — não vende no prejuízo se oscilar para baixo)\n\n"
+            f"💵 <b>Valor investido nesta compra:</b> US$ {total_invested:,.2f}\n"
+            f"🏷️ <b>Preço de compra:</b> US$ {entry_price:,.4f}\n"
+            f"🎯 <b>Meta de venda:</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.1f}%</b> 👉 lucro estimado de <b>+US$ {expected_profit:,.2f}</b>)\n\n"
             f"{why_block}"
-            f"<i>O robô checa o preço a cada 15 min e só vende quando bater a meta de lucro!</i>"
+            f"{portfolio_block}"
         )
         return self.send_message(msg)
 
@@ -164,17 +169,41 @@ class TelegramNotifier:
     def _format_buy_reason_block(
         coin: str,
         tech_reason: str,
-        sent_reason: str,
-        ranking_lines: Optional[List[str]]
+        sent_reason: str
     ) -> str:
-        if not (tech_reason or sent_reason or ranking_lines):
+        if not (tech_reason or sent_reason):
             return ""
-        ranking_str = "\n".join(ranking_lines or [])
         return (
-            f"💡 <b>Por que o robô escolheu {coin} hoje:</b>\n"
-            f"• <b>Gráfico:</b> {html.escape(tech_reason)}\n"
-            f"• <b>Notícias e Humor:</b> {html.escape(sent_reason)}\n\n"
-            f"📊 <b>Placar das moedas analisadas:</b>\n{ranking_str}\n\n"
+            f"💡 <b>Por que compramos {coin} agora:</b>\n"
+            f"• <b>Momento do Preço:</b> {html.escape(tech_reason)}\n"
+            f"• <b>Clima do Mercado:</b> {html.escape(sent_reason)}\n\n"
+        )
+
+    @staticmethod
+    def _format_operation_portfolio_block(
+        prev_total: float,
+        current_total: float,
+        round_profit: float,
+        invested_total: float,
+        free_cash: float,
+        withdrawable_pool: float
+    ) -> str:
+        if current_total <= 0 and prev_total <= 0:
+            return ""
+        profit_line = (
+            f"• ✨ <b>Lucro desta rodada:</b> +US$ {round_profit:,.2f}\n"
+            if round_profit > 0
+            else ""
+        )
+        brl_est = withdrawable_pool * 5.80
+        return (
+            f"💼 <b>Resumo da sua Conta:</b>\n"
+            f"• 📊 <b>Patrimônio Anterior:</b> US$ {prev_total:,.2f}\n"
+            f"• 💰 <b>Patrimônio Atual:</b> US$ {current_total:,.2f}\n"
+            f"{profit_line}"
+            f"• 📈 <b>Total Operando nas Moedas:</b> US$ {invested_total:,.2f}\n"
+            f"• 💵 <b>Caixa Livre p/ Compras:</b> US$ {free_cash:,.2f}\n"
+            f"• 💸 <b>Guardado p/ Saque Hoje:</b> US$ {withdrawable_pool:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>"
         )
 
     def notify_order_closed(
@@ -188,23 +217,30 @@ class TelegramNotifier:
         to_reinvest: float,
         is_simulated: bool = False,
         new_trading_balance: float = 0.0,
-        new_withdrawable_pool: float = 0.0
+        new_withdrawable_pool: float = 0.0,
+        prev_portfolio_total: float = 0.0,
+        current_portfolio_total: float = 0.0,
+        invested_total: float = 0.0,
+        free_cash: float = 0.0
     ) -> bool:
-        """Notifica fechamento de posição (Lucro ou Proteção) de forma simples."""
+        """Notifica fechamento de posição com resumo completo de patrimônio antes/depois e lucro da rodada."""
         tag = "🧪 <b>[TESTE SIMULADO]</b>\n" if is_simulated else ""
         header, result_line = self._resolve_human_close_summary(outcome, pnl_usd, entry_price, exit_price)
         profit_block = self._format_profit_allocation(pnl_usd, to_reinvest, to_withdraw)
-        wallet_block = self._format_wallet_footer(new_trading_balance, new_withdrawable_pool)
+        eff_current = current_portfolio_total or (new_trading_balance + new_withdrawable_pool)
+        eff_prev = prev_portfolio_total or max(0.0, eff_current - pnl_usd)
+        portfolio_block = self._format_operation_portfolio_block(
+            eff_prev, eff_current, pnl_usd, invested_total, free_cash, new_withdrawable_pool
+        )
 
         msg = (
             f"{tag}{header}\n\n"
-            f"🪙 <b>Moeda:</b> {symbol}\n"
-            f"📥 <b>Comprou por:</b> US$ {entry_price:,.4f}\n"
-            f"📤 <b>Vendeu por:</b> US$ {exit_price:,.4f}\n"
+            f"🪙 <b>Moeda vendida:</b> {symbol}\n"
+            f"📥 <b>Preço de compra:</b> US$ {entry_price:,.4f}\n"
+            f"📤 <b>Preço de venda:</b> US$ {exit_price:,.4f}\n"
             f"{result_line}\n\n"
             f"{profit_block}"
-            f"<i>O robô já está livre para buscar a próxima oportunidade.</i>"
-            f"{wallet_block}"
+            f"{portfolio_block}"
         )
         return self.send_message(msg)
 
@@ -218,10 +254,10 @@ class TelegramNotifier:
         pnl_pct = ((exit_price - entry_price) / entry_price) * 100
         if outcome == "TP":
             header = "💰 <b>CashBot — Venda com Lucro Concluída!</b>"
-            line = f"✅ <b>Seu Lucro:</b> +US$ {pnl_usd:,.2f} (+{pnl_pct:.1f}%)"
+            line = f"✅ <b>Lucro da Rodada:</b> +US$ {pnl_usd:,.2f} (<b>+{pnl_pct:.2f}%</b>)"
             return header, line
-        header = "🛑 <b>CashBot — Venda de Proteção Acionada (Stop)</b>"
-        line = f"🛡️ <b>Perda controlada em:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.1f}%)"
+        header = "🛑 <b>CashBot — Venda de Proteção Acionada</b>"
+        line = f"🛡️ <b>Resultado da Rodada:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.2f}%)"
         return header, line
 
     @staticmethod
@@ -229,10 +265,80 @@ class TelegramNotifier:
         if pnl_usd <= 0:
             return ""
         return (
-            f"🏦 <b>Divisão inteligente deste lucro:</b>\n"
-            f"• 📈 <b>Reinvestido no Giro (Bola de Neve):</b> +US$ {to_reinvest:,.2f}\n"
-            f"• 💸 <b>Separado p/ Saque (Pix):</b> +US$ {to_withdraw:,.2f}\n\n"
+            f"🏦 <b>Para onde foi esse lucro:</b>\n"
+            f"• 🔄 <b>Somado ao Capital de Giro (60%):</b> +US$ {to_reinvest:,.2f}\n"
+            f"• 💸 <b>Separado p/ seu Saque Hoje (40%):</b> +US$ {to_withdraw:,.2f}\n\n"
         )
+
+    def notify_end_of_day_summary(
+        self,
+        stats: Dict[str, Any],
+        start_hour: int = 22,
+        end_hour: int = 23
+    ) -> bool:
+        """Envia o consolidado diário no início da janela de pausa/saque (22h BRT)."""
+        start_total = float(stats.get("start_of_day_total", 0.0))
+        end_total = float(stats.get("end_of_day_total", 0.0))
+        day_profit = float(stats.get("day_profit_usd", 0.0))
+        closed_count = int(stats.get("closed_today_count", 0))
+        open_count = int(stats.get("open_trades_count", 0))
+        invested_usd = float(stats.get("invested_usd", 0.0))
+        free_cash = float(stats.get("free_cash_usd", 0.0))
+        pool = float(stats.get("withdrawable_pool", 0.0))
+        withdraw_guide = self._format_withdraw_eligibility(pool, end_hour)
+
+        msg = (
+            f"🌙 <b>CashBot — Fechamento do Dia ({start_hour}h BRT)</b>\n\n"
+            f"📊 <b>Balanço de Hoje:</b>\n"
+            f"• 🌅 <b>Patrimônio no Início do Dia:</b> US$ {start_total:,.2f}\n"
+            f"• 🏁 <b>Patrimônio Agora no Fim do Dia:</b> US$ {end_total:,.2f}\n"
+            f"• 💰 <b>Lucro Conquistado Hoje:</b> +US$ {day_profit:,.2f} <i>({closed_count} vendas com lucro hoje)</i>\n\n"
+            f"⚙️ <b>Resumo das Operações:</b>\n"
+            f"• 📈 <b>Moedas em andamento ({open_count}):</b> US$ {invested_usd:,.2f} investidos aguardando meta de lucro\n"
+            f"• 💵 <b>Caixa Livre em Conta:</b> US$ {free_cash:,.2f}\n\n"
+            f"{withdraw_guide}\n\n"
+            f"⏸️ <b>Pausa Programada ({start_hour}h às {end_hour}h):</b> O robô não fará compras nem vendas nesta 1 hora para você sacar com tranquilidade sem bagunçar o saldo."
+        )
+        return self.send_message(msg)
+
+    @staticmethod
+    def _format_withdraw_eligibility(pool: float, end_hour: int) -> str:
+        brl_est = pool * 5.80
+        if pool >= 10.0:
+            return (
+                f"✅ <b>Saque Liberado (Acima do mínimo de US$ 10):</b>\n"
+                f"Você tem <b>US$ {pool:,.2f}</b> <i>(≈ R$ {brl_est:,.2f})</i> separados para saque!\n"
+                f"👉 Se quiser sacar na Binance, faça até as <b>{end_hour}h</b>. Caso não saque até lá, esse valor será somado automaticamente ao capital para investir mais forte amanhã!"
+            )
+        return (
+            f"💸 <b>Reserva de Lucro Hoje:</b> US$ {pool:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>\n"
+            f"ℹ️ Como o valor ainda está abaixo do mínimo de saque da Binance (<b>US$ 10.00</b>), às <b>{end_hour}h</b> o robô vai juntar automaticamente esse lucro ao seu capital para render mais no próximo dia!"
+        )
+
+    def notify_daily_restart(
+        self,
+        total_capital: float,
+        free_cash: float,
+        invested_usd: float,
+        open_count: int,
+        swept_pool: float = 0.0
+    ) -> bool:
+        """Notifica a retomada de operações às 23h BRT informando o capital total considerado."""
+        reinvest_note = (
+            f"• 🔄 <b>Lucro de hoje reinvestido no giro:</b> +US$ {swept_pool:,.2f}\n"
+            if swept_pool > 0
+            else ""
+        )
+        msg = (
+            f"🚀 <b>CashBot — Iniciando Novo Ciclo Diário!</b>\n\n"
+            f"A janela de saque encerrou e o robô voltou a operar considerando o capital disponível na sua conta:\n\n"
+            f"💼 <b>Capital Total em Operação:</b> <b>US$ {total_capital:,.2f}</b>\n"
+            f"{reinvest_note}"
+            f"• 💵 <b>Caixa Livre para Novas Compras:</b> US$ {free_cash:,.2f}\n"
+            f"• 📈 <b>Já Investido ({open_count} moedas ativas):</b> US$ {invested_usd:,.2f}\n\n"
+            f"<i>Boas operações! Você receberá um aviso a cada compra ou venda realizada.</i>"
+        )
+        return self.send_message(msg)
 
 
 def _run_cli_test() -> None:
