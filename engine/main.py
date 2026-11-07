@@ -37,6 +37,11 @@ MAX_OPEN_SLOTS = 4
 MIN_SCORE_FOR_TRADE = 63.0
 TACTICAL_PROFIT_MIN_PCT = 0.55
 TACTICAL_HOLD_MINUTES = 45.0
+ROTATION_MIN_CANDIDATE_SCORE = 72.0
+ROTATION_MAX_OPEN_SCORE = 55.0
+ROTATION_MIN_HOLD_MINUTES = 60.0
+ROTATION_MIN_PNL_PCT = -0.35
+ROTATION_MAX_PNL_PCT = 0.40
 CATASTROPHE_STOP_PCT = 7.5
 TIME_STOP_MINUTES = 48.0 * 60.0
 TIME_STOP_MAX_LOSS_PCT = 2.0
@@ -81,21 +86,95 @@ class TradingEngine:
         free_capital = self._compute_free_capital(updated_ledger, remaining_open)
 
         if len(remaining_open) >= MAX_OPEN_SLOTS or free_capital < 12.0:
-            logger.info(
-                f"Carteira com {len(remaining_open)}/{MAX_OPEN_SLOTS} posições ativas e "
-                f"${free_capital:,.2f} livre. Comitê de IA registrado e posições monitoradas."
-            )
-            return
+            if self._try_rotate_stagnant_position(remaining_open, deliberations, updated_ledger):
+                remaining_open = self.db.get_open_trades()
+                updated_ledger = self.db.get_ledger()
+                free_capital = self._compute_free_capital(updated_ledger, remaining_open)
+            else:
+                logger.info(
+                    f"Carteira com {len(remaining_open)}/{MAX_OPEN_SLOTS} posições ativas e "
+                    f"${free_capital:,.2f} livre. Comitê de IA registrado e posições monitoradas."
+                )
+                return
 
         self._decide_and_execute(deliberations, updated_ledger, remaining_open, notify_wait=bypass_cooldown)
 
-    def _is_duplicate_scheduled_cycle(self, force_opportunity: bool, bypass_cooldown: bool) -> bool:
-        if force_opportunity or bypass_cooldown:
+    def _try_rotate_stagnant_position(
+        self,
+        open_trades: List[Dict[str, Any]],
+        deliberations: List[Deliberation],
+        ledger: Dict[str, float]
+    ) -> bool:
+        """
+        Rotação Ativa de Capital: Se houver uma oportunidade externa de altíssimo potencial (>=72)
+        e uma posição aberta estiver estagnada no zero-a-zero há >60min com nota baixa (<=55),
+        encerra o ativo estagnado para alocar o capital na oportunidade mais explosiva!
+        """
+        best_candidate = self._find_prime_rotation_candidate(deliberations, open_trades)
+        if not best_candidate:
             return False
-        if not self.db.has_recent_consensus(minutes=12):
+
+        weakest_trade = self._find_rotatable_open_trade(open_trades, deliberations)
+        if not weakest_trade:
             return False
-        logger.info("Ciclo automático já executado há menos de 12 min por outra instância. Pulando duplicata.")
+
+        current_price = self.exchange.fetch_current_price(
+            str(weakest_trade["symbol"]), float(weakest_trade["entry_price"])
+        )
+        logger.info(
+            f"🔄 Rotação Ativa: Substituindo {weakest_trade['symbol']} por {best_candidate.symbol} "
+            f"(Score Oportunidade: {best_candidate.final_score:.1f})!"
+        )
+        self._settle_closed_position(
+            weakest_trade, "CLOSED_TP" if current_price >= float(weakest_trade["entry_price"]) else "CLOSED_SL",
+            current_price, ledger, "ROTATION"
+        )
         return True
+
+    @staticmethod
+    def _find_prime_rotation_candidate(
+        deliberations: List[Deliberation],
+        open_trades: List[Dict[str, Any]]
+    ) -> Optional[Deliberation]:
+        open_symbols = {str(t["symbol"]) for t in open_trades}
+        prime_candidates = [
+            d for d in deliberations
+            if not d.veto and d.final_score >= ROTATION_MIN_CANDIDATE_SCORE and d.symbol not in open_symbols
+        ]
+        if not prime_candidates:
+            return None
+        return max(prime_candidates, key=lambda x: x.final_score)
+
+    def _find_rotatable_open_trade(
+        self,
+        open_trades: List[Dict[str, Any]],
+        deliberations: List[Deliberation]
+    ) -> Optional[Dict[str, Any]]:
+        delib_map = {d.symbol: d for d in deliberations}
+        for trade in open_trades:
+            if self._is_trade_eligible_for_rotation(trade, delib_map.get(str(trade["symbol"]))):
+                return trade
+        return None
+
+    def _is_trade_eligible_for_rotation(
+        self,
+        trade: Dict[str, Any],
+        delib: Optional[Deliberation]
+    ) -> bool:
+        if delib and (delib.final_score > ROTATION_MAX_OPEN_SCORE or delib.indicators.is_strong_uptrend):
+            return False
+
+        age_minutes = self._compute_trade_age_minutes(trade.get("created_at"))
+        if age_minutes < ROTATION_MIN_HOLD_MINUTES:
+            return False
+
+        entry_price = float(trade["entry_price"])
+        if entry_price <= 0:
+            return False
+        current_price = self.exchange.fetch_current_price(str(trade["symbol"]), entry_price)
+        pct_diff = ((current_price - entry_price) / entry_price) * 100.0
+
+        return ROTATION_MIN_PNL_PCT <= pct_diff <= ROTATION_MAX_PNL_PCT
 
     def _handle_withdraw_pause_window(self, force_opportunity: bool) -> bool:
         """

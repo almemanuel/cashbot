@@ -253,6 +253,10 @@ class TelegramNotifier:
         exit_price: float
     ) -> Tuple[str, str]:
         pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+        if outcome == "ROTATION":
+            header = "🔄 <b>CashBot — Rotação Ativa de Capital</b>"
+            line = f"⚡ <b>Vaga liberada p/ oportunidade melhor:</b> {pnl_usd:+.2f} USD ({pnl_pct:+.2f}%)"
+            return header, line
         if pnl_usd >= 0:
             header = "💰 <b>CashBot — Venda com Lucro Concluída!</b>"
             line = f"✅ <b>Lucro da Rodada:</b> +US$ {pnl_usd:,.2f} (<b>+{pnl_pct:.2f}%</b>)"

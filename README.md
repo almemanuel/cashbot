@@ -31,11 +31,12 @@ Para cada moeda, o motor calcula 250 velas de **15 minutos** e entrega ao Comit�
 
 ---
 
-### 3. Proteção Anti-Ruído, Disjuntor de Catástrofe (`-7.5%`), Stop Temporal (`48h`) e Modo Recuperação 100%
+### 3. Proteção Anti-Ruído, Disjuntor de Catástrofe (`-7.5%`), Rotação Ativa de Capital e Modo Recuperação 100%
 * **Imune a Ruído Curto (Sem Stop Curto):** Oscilações normais de mercado (`-1%` a `-7%`) não derrubam a posição; o robô aguarda a retomada sem realizar prejuízo bobo.
 * **Disjuntor de Catástrofe (`-7.5%`):** Mantém uma trava de emergência para proteger a banca contra colapsos severos (evitando que uma moeda derreta `-40%` ou `-80%`).
-* **Stop Temporal Inteligente (`48h`):** Se uma operação completar **48 horas** estagnada (andando de lado ou com recuo leve de até `-2.0%` e sem força compradora na IA), o robô encerra para destravar o capital e girar em moedas melhores.
-* **Modo Recuperação 100% do Capital (*High-Water Mark*):** Se o Disjuntor ou o Stop Temporal gerar qualquer perda, o robô entra automaticamente em **Modo Recuperação**: **100% dos próximos lucros** voltam direto para o **Capital de Giro** (zero separação para saque) até que 100% do capital original esteja recomposto!
+* **Rotação Ativa de Capital (Custo de Oportunidade):** Mesmo com as 4 vagas cheias, o robô continua varrendo o mercado. Se encontrar uma oportunidade com nota altíssima ($\ge 72$) e houver uma moeda aberta estagnada há $>60$ min no zero-a-zero com nota fraca ($\le 55$), o robô encerra o ativo estagnado no empate e entra imediatamente na moeda mais explosiva!
+* **Stop Temporal Inteligente (`48h`):** Se uma operação completar **48 horas** estagnada (andando de lado ou com recuo leve de até `-2.0%` e sem força compradora na IA), o robô encerra para destravar o capital.
+* **Modo Recuperação 100% do Capital (*High-Water Mark*):** Se o Disjuntor ou Stop Temporal gerar qualquer perda, **100% dos próximos lucros** voltam direto para o **Capital de Giro** até recompor o capital original centavo por centavo.
 * **Análise de Continuidade no Ponto de Venda (`_should_ride_strong_uptrend`):** Mesmo quando a moeda bate no ponto de venda, antes de encerrar a operação o robô verifica se a tendência de alta continua forte (`Score IA >= 68`, `Preço > EMA20 > EMA50`, acima da `VWAP` e `RSI < 68` sem exaustão). Se ainda houver força compradora, ele **segura a venda por mais rodadas** e sobe o alvo (`Take Profit`) em **`+0.8%`** para capturar toda a pernada de alta!
 
 ---
