@@ -277,17 +277,28 @@ class Database:
     def get_dashboard_overview(self, trades_limit: int = 10, consensus_limit: int = 10) -> Dict[str, Any]:
         """
         Carrega todos os dados do painel em uma única conexão ao banco,
-        eliminando as 4 conexões separadas por carregamento de tela.
+        eliminando as conexões separadas por carregamento de tela.
         """
         with self._session() as cur:
             open_trades = self._fetch_open_trades_in_cursor(cur)
             return {
+                "db_mode": "Neon PostgreSQL" if self.is_postgres else "SQLite Local",
                 "ledger": self._fetch_ledger_in_cursor(cur),
+                "ledger_history": self._fetch_ledger_history_in_cursor(cur, limit=30),
                 "open_trade": open_trades[0] if open_trades else None,
                 "open_trades": open_trades,
                 "recent_trades": self._fetch_recent_trades_in_cursor(cur, trades_limit),
                 "recent_consensus": self._fetch_recent_consensus_in_cursor(cur, consensus_limit),
             }
+
+    def _fetch_ledger_history_in_cursor(self, cur, limit: int = 30) -> List[Dict[str, Any]]:
+        query = self._sql(
+            "SELECT id, trading_balance, withdrawable_pool, updated_at "
+            "FROM portfolio_ledger ORDER BY id DESC LIMIT ?"
+        )
+        cur.execute(query, (int(limit),))
+        rows = self._rows_to_dicts(cur, cur.fetchall())
+        return list(reversed(rows))
 
     @staticmethod
     def _fetch_ledger_in_cursor(cur) -> Dict[str, float]:

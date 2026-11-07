@@ -9,6 +9,60 @@ if ('serviceWorker' in navigator) {
 
 let activeTab = 'dashboard';
 let overviewData = null;
+let portfolioChartInstance = null;
+const AUTH_STORAGE_KEY = 'cashbot_auth_token';
+
+function getAuthToken() {
+  return localStorage.getItem(AUTH_STORAGE_KEY) || '';
+}
+
+function authHeaders(extra = {}) {
+  return Object.assign({ 'Authorization': `Bearer ${getAuthToken()}` }, extra);
+}
+
+function showLoginModal() {
+  const modal = document.getElementById('loginOverlay');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function hideLoginModal() {
+  const modal = document.getElementById('loginOverlay');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  const input = document.getElementById('loginPasswordInput');
+  const errEl = document.getElementById('loginErrorMsg');
+  const password = input ? input.value : '';
+
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+    if (res.ok && data.token) {
+      localStorage.setItem(AUTH_STORAGE_KEY, data.token);
+      if (errEl) errEl.classList.add('hidden');
+      if (input) input.value = '';
+      hideLoginModal();
+      showToast('Painel desbloqueado!');
+      await refreshData();
+      return;
+    }
+    if (errEl) errEl.classList.remove('hidden');
+  } catch (e) {
+    showToast('Erro de conexão ao validar senha.');
+  }
+}
+
+function logoutApp() {
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  showLoginModal();
+  showToast('Painel bloqueado.');
+}
 
 // Alterna abas
 function switchTab(tabId) {
@@ -83,8 +137,13 @@ async function refreshData() {
   if (icon) icon.classList.add('fa-spin');
 
   try {
-    const res = await fetch('/api/overview');
+    const res = await fetch('/api/overview', { headers: authHeaders() });
+    if (res.status === 401) {
+      showLoginModal();
+      return;
+    }
     if (!res.ok) throw new Error('Falha ao obter dados');
+    hideLoginModal();
     const data = await res.json();
     overviewData = data;
     renderData(data);
@@ -98,20 +157,28 @@ async function refreshData() {
 
 function renderData(data) {
   const ledger = data.ledger || { trading_balance: 1000, withdrawable_pool: 0 };
+  const ledgerHistory = data.ledger_history || [];
   const openTrade = data.open_trade;
   const trades = data.recent_trades || [];
   const logs = data.recent_consensus || [];
+
+  const headerStatus = document.getElementById('headerStatus');
+  if (headerStatus && data.db_mode) {
+    headerStatus.innerText = `Binance Spot • ${data.db_mode}`;
+  }
 
   // 1. Ledger e Pool de Retirada
   const withdrawable = Number(ledger.withdrawable_pool || 0);
   const trading = Number(ledger.trading_balance || 0);
   const total = withdrawable + trading;
-  const brlRate = 5.80; // Estimativa cambial para conveniência
+  const brlRate = 5.80;
 
   document.getElementById('withdrawableUsd').innerText = `$${withdrawable.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   document.getElementById('withdrawableBrl').innerText = `≈ R$ ${(withdrawable * brlRate).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   document.getElementById('tradingBalanceUsd').innerText = `$${trading.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   document.getElementById('totalPortfolioUsd').innerText = `$${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  renderPortfolioChart(ledgerHistory, trades, trading, withdrawable);
 
   // 2. Posições Abertas (Multi-Posição / Diversificação)
   const openContent = document.getElementById('openTradeContent');
@@ -282,11 +349,104 @@ function renderData(data) {
   }
 }
 
+// Renderiza Gráfico de Evolução Patrimonial (Chart.js)
+function renderPortfolioChart(history, trades, currentTrading, currentWithdraw) {
+  const canvas = document.getElementById('portfolioChart');
+  if (!canvas || typeof Chart === 'undefined') return;
+
+  const realizedPnl = trades
+    .filter(t => t.status === 'CLOSED_TP' || t.status === 'CLOSED_SL')
+    .reduce((acc, t) => acc + Number(t.pnl_usd || 0), 0);
+
+  const pnlBadge = document.getElementById('pnlSummaryBadge');
+  if (pnlBadge) {
+    const sign = realizedPnl >= 0 ? '+' : '';
+    pnlBadge.innerText = `Lucro Realizado: ${sign}$${realizedPnl.toFixed(2)}`;
+    pnlBadge.className = realizedPnl >= 0
+      ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+      : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20';
+  }
+
+  const points = history.length > 0
+    ? history
+    : [{ trading_balance: currentTrading, withdrawable_pool: currentWithdraw, updated_at: 'Agora' }];
+
+  const labels = points.map((p, idx) => {
+    const raw = String(p.updated_at || '');
+    return raw.length >= 16 ? raw.substring(5, 16).replace('T', ' ') : `Pt ${idx + 1}`;
+  });
+  const totalSeries = points.map(p => Number(p.trading_balance || 0) + Number(p.withdrawable_pool || 0));
+  const tradingSeries = points.map(p => Number(p.trading_balance || 0));
+  const withdrawSeries = points.map(p => Number(p.withdrawable_pool || 0));
+
+  if (portfolioChartInstance) {
+    portfolioChartInstance.destroy();
+  }
+
+  portfolioChartInstance = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Capital Total ($)',
+          data: totalSeries,
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16, 185, 129, 0.12)',
+          borderWidth: 2.5,
+          tension: 0.35,
+          fill: true,
+        },
+        {
+          label: 'Capital de Giro ($)',
+          data: tradingSeries,
+          borderColor: '#06b6d4',
+          borderDash: [4, 4],
+          borderWidth: 2,
+          tension: 0.35,
+          fill: false,
+        },
+        {
+          label: 'Disponível p/ Saque ($)',
+          data: withdrawSeries,
+          borderColor: '#f59e0b',
+          borderWidth: 2,
+          tension: 0.35,
+          fill: false,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#64748b', font: { size: 9 } },
+          grid: { color: 'rgba(255,255,255,0.04)' }
+        },
+        y: {
+          ticks: { color: '#94a3b8', font: { size: 10 }, callback: v => `$${v}` },
+          grid: { color: 'rgba(255,255,255,0.06)' }
+        }
+      }
+    }
+  });
+}
+
 // Disparo de Ações
 async function triggerAction(endpoint, loadingText) {
   showToast(loadingText);
   try {
-    const res = await fetch(endpoint, { method: 'POST' });
+    const res = await fetch(endpoint, { method: 'POST', headers: authHeaders() });
+    if (res.status === 401) {
+      showLoginModal();
+      return;
+    }
     const data = await res.json();
     if (data.success) {
       showToast(data.message || 'Ação concluída com sucesso!');
@@ -314,9 +474,13 @@ async function saveTelegramConfig() {
   try {
     const res = await fetch('/api/save-config', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ TELEGRAM_BOT_TOKEN: token, TELEGRAM_CHAT_ID: chatId })
     });
+    if (res.status === 401) {
+      showLoginModal();
+      return;
+    }
     const data = await res.json();
     if (data.success) {
       showToast('Configuração salva com sucesso!');

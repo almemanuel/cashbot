@@ -11,6 +11,7 @@
   <meta name="apple-mobile-web-app-title" content="CashBot">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2310b981'/><text x='50%' y='65%' font-size='50' font-weight='bold' text-anchor='middle' fill='%23ffffff'>CB</text></svg>">
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script>
     tailwind.config = {
@@ -80,12 +81,38 @@
           <i class="fa-regular fa-bell text-emerald-400"></i>
           <span class="hidden sm:inline">Alertas</span>
         </button>
-        <button onclick="refreshData()" class="p-2 rounded-lg bg-slate-800/90 text-slate-300 hover:text-white border border-slate-700/80 transition active:rotate-180">
+        <button onclick="refreshData()" class="p-2 rounded-lg bg-slate-800/90 text-slate-300 hover:text-white border border-slate-700/80 transition active:rotate-180" title="Atualizar">
           <i class="fa-solid fa-arrows-rotate text-sm" id="refreshIcon"></i>
+        </button>
+        <button onclick="logoutApp()" class="p-2 rounded-lg bg-slate-800/90 text-rose-400 hover:text-rose-300 border border-slate-700/80 transition" title="Bloquear App">
+          <i class="fa-solid fa-lock text-sm"></i>
         </button>
       </div>
     </div>
   </header>
+
+  <!-- TELA DE BLOQUEIO / LOGIN -->
+  <div id="loginOverlay" class="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-xl flex items-center justify-center p-4 hidden">
+    <div class="glass-card rounded-2xl p-6 max-w-sm w-full glow-green border border-emerald-500/30 space-y-4 text-center">
+      <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/30">
+        <i class="fa-solid fa-shield-halved text-slate-950 text-xl font-bold"></i>
+      </div>
+      <div>
+        <h2 class="text-lg font-extrabold text-white">CashBot Protegido</h2>
+        <p class="text-xs text-slate-400 mt-1">Digite sua senha de acesso (`APP_PASSWORD`) para desbloquear sua carteira.</p>
+      </div>
+      <form onsubmit="submitLogin(event)" class="space-y-3 text-left">
+        <div>
+          <label class="text-[10px] text-slate-400 uppercase font-semibold">Senha de Acesso</label>
+          <input type="password" id="loginPasswordInput" placeholder="••••••••" required class="w-full mt-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+        </div>
+        <p id="loginErrorMsg" class="text-xs text-rose-400 hidden text-center font-semibold">Senha incorreta.</p>
+        <button type="submit" class="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs transition shadow-lg shadow-emerald-500/20">
+          <i class="fa-solid fa-unlock-keyhole mr-1.5"></i>Desbloquear Painel
+        </button>
+      </form>
+    </div>
+  </div>
 
   <!-- CONTEÚDO PRINCIPAL (MOBILE FIRST) -->
   <main class="flex-1 max-w-2xl w-full mx-auto px-4 py-4 space-y-4 mb-20">
@@ -137,12 +164,27 @@
         <i class="fa-solid fa-clock-rotate-left mr-1.5"></i> Histórico
       </button>
       <button onclick="switchTab('sim')" id="tabBtn-sim" class="flex-1 py-2 rounded-lg text-slate-400 hover:text-white transition">
-        <i class="fa-solid fa-flask mr-1.5"></i> Simulação
+        <i class="fa-solid fa-sliders mr-1.5"></i> Ajustes
       </button>
     </div>
 
     <!-- ABA 1: VISÃO GERAL (DASHBOARD) -->
     <div id="tab-dashboard" class="space-y-4">
+
+      <!-- GRÁFICO DE EVOLUÇÃO PATRIMONIAL -->
+      <div class="glass-card rounded-2xl p-4 border border-slate-800">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-chart-line text-emerald-400"></i> Evolução do Capital, Lucro & Saques
+          </h2>
+          <span id="pnlSummaryBadge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            Lucro Acumulado: $0.00
+          </span>
+        </div>
+        <div class="relative h-52 w-full">
+          <canvas id="portfolioChart"></canvas>
+        </div>
+      </div>
       
       <!-- POSIÇÃO ABERTA / STATUS DO ROBÔ -->
       <div class="glass-card rounded-2xl p-4 glow-cyan border border-slate-800">
@@ -199,42 +241,25 @@
       </div>
     </div>
 
-    <!-- ABA 4: SIMULAÇÃO & NOTIFICAÇÕES -->
+    <!-- ABA 4: OPERAÇÃO MANUAL & CONFIGURAÇÕES -->
     <div id="tab-sim" class="space-y-4 hidden">
       <div class="glass-card rounded-2xl p-4 border border-slate-800">
         <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300 mb-1 flex items-center gap-2">
-          <i class="fa-solid fa-flask-vial text-emerald-400"></i> Central de Testes e Simulação
+          <i class="fa-solid fa-bolt text-emerald-400"></i> Ações Rápidas
         </h2>
         <p class="text-xs text-slate-400 mb-4">
-          Dispare simulações pontuais para ver o robô analisar o mercado, emitir ordens e enviar notificações direto pro seu celular.
+          Dispare uma varredura imediata do mercado ou teste o alerta no seu Telegram.
         </p>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          <button onclick="triggerAction('/api/run-cycle', 'Executando Varredura Diária...')" class="py-3 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-95">
-            <i class="fa-solid fa-play text-emerald-400"></i>
-            1. Executar Varredura
+          <button onclick="triggerAction('/api/run-cycle', 'Executando Varredura do Mercado...')" class="py-3 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition active:scale-95">
+            <i class="fa-solid fa-magnifying-glass-chart"></i>
+            Executar Varredura Agora
           </button>
 
-          <button onclick="triggerAction('/api/simulate-buy', 'Disparando Compra + OCO...')" class="py-3 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition active:scale-95">
-            <i class="fa-solid fa-cart-shopping"></i>
-            2. Forçar Compra Simulada
-          </button>
-
-          <button onclick="triggerAction('/api/simulate-tp', 'Simulando Take Profit...')" class="py-3 px-3 rounded-xl bg-teal-800 hover:bg-teal-700 text-teal-200 border border-teal-600/50 font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-95">
-            <i class="fa-solid fa-bullseye text-teal-300"></i>
-            3. Simular Fechar no TP (+Lucro)
-          </button>
-
-          <button onclick="triggerAction('/api/simulate-sl', 'Simulando Stop Loss...')" class="py-3 px-3 rounded-xl bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800/50 font-semibold text-xs flex items-center justify-center gap-2 transition active:scale-95">
-            <i class="fa-solid fa-shield-xmark text-rose-400"></i>
-            4. Simular Stop Loss (SL)
-          </button>
-        </div>
-
-        <div class="mt-4 pt-4 border-t border-slate-800">
-          <button onclick="triggerAction('/api/test-notification', 'Enviando notificação de teste...')" class="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-cyan-600/20 transition active:scale-95">
+          <button onclick="triggerAction('/api/test-notification', 'Enviando notificação de teste...')" class="py-3 px-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-cyan-600/20 transition active:scale-95">
             <i class="fa-brands fa-telegram text-base"></i>
-            Disparar Teste no Telegram do Celular
+            Testar Alerta no Telegram
           </button>
         </div>
       </div>
@@ -298,8 +323,8 @@
         <span class="text-[10px] font-semibold">Trades</span>
       </button>
       <button onclick="switchTab('sim')" id="navBtn-sim" class="flex flex-col items-center gap-1 hover:text-white transition">
-        <i class="fa-solid fa-flask text-lg"></i>
-        <span class="text-[10px] font-semibold">Simulação</span>
+        <i class="fa-solid fa-sliders text-lg"></i>
+        <span class="text-[10px] font-semibold">Ajustes</span>
       </button>
     </div>
   </nav>

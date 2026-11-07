@@ -7,10 +7,12 @@ Segue Object Calisthenics (despacho de rotas sem cadeia de if/else, 1 nível de 
 
 import os
 import sys
+import hmac
+import hashlib
 import json
 import socket
 import logging
-from typing import Dict, Any, Callable, List
+from typing import Dict, Any, Callable, List, Optional
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -42,6 +44,33 @@ def get_local_ip() -> str:
         return ip
     except Exception:
         return "127.0.0.1"
+
+
+class AuthGuard:
+    """Valida senha de acesso e emite/verifica token HMAC-SHA256 stateless."""
+
+    @staticmethod
+    def _current_password() -> str:
+        return os.getenv("APP_PASSWORD", "admin123").strip() or "admin123"
+
+    @classmethod
+    def expected_token(cls) -> str:
+        secret = cls._current_password().encode("utf-8")
+        return hmac.new(secret, b"cashbot-auth-v1", hashlib.sha256).hexdigest()
+
+    @classmethod
+    def verify_password(cls, candidate: str) -> Optional[str]:
+        expected_pwd = cls._current_password()
+        if hmac.compare_digest(candidate.strip(), expected_pwd):
+            return cls.expected_token()
+        return None
+
+    @classmethod
+    def is_authorized(cls, auth_header: str) -> bool:
+        if not auth_header.startswith("Bearer "):
+            return False
+        provided = auth_header[7:].strip()
+        return hmac.compare_digest(provided, cls.expected_token())
 
 
 class EnvConfigUpdater:
@@ -90,7 +119,7 @@ class CashBotHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
         self.wfile.write(json.dumps(data, default=str).encode("utf-8"))
 
@@ -98,21 +127,41 @@ class CashBotHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
+
+    def _require_auth(self) -> bool:
+        auth_header = str(self.headers.get("Authorization", ""))
+        if AuthGuard.is_authorized(auth_header):
+            return True
+        self._send_json({"success": False, "error": "Não autorizado. Faça login."}, 401)
+        return False
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/overview":
-            db = Database()
-            self._send_json(db.get_dashboard_overview(trades_limit=10, consensus_limit=10))
+            self._handle_get_overview()
             return
 
         super().do_GET()
 
+    def _handle_get_overview(self) -> None:
+        if not self._require_auth():
+            return
+        db = Database()
+        self._send_json(db.get_dashboard_overview(trades_limit=10, consensus_limit=10))
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         payload = self._read_json_body()
+
+        if parsed.path == "/api/login":
+            self._handle_login(payload)
+            return
+
+        if not self._require_auth():
+            return
+
         routes = self._post_routes()
         handler = routes.get(parsed.path)
 
@@ -121,6 +170,14 @@ class CashBotHandler(SimpleHTTPRequestHandler):
             return
 
         self._execute_route_safely(handler, payload)
+
+    def _handle_login(self, payload: Dict[str, Any]) -> None:
+        password = str(payload.get("password", ""))
+        token = AuthGuard.verify_password(password)
+        if token is None:
+            self._send_json({"success": False, "error": "Senha incorreta."}, 401)
+            return
+        self._send_json({"success": True, "token": token})
 
     def _post_routes(self) -> Dict[str, Callable[[Dict[str, Any]], None]]:
         return {
@@ -279,7 +336,8 @@ class CashBotHandler(SimpleHTTPRequestHandler):
     def _handle_save_config(self, payload: Dict[str, Any]) -> None:
         token = str(payload.get("TELEGRAM_BOT_TOKEN", "")).strip()
         chat_id = str(payload.get("TELEGRAM_CHAT_ID", "")).strip()
-        updater = EnvConfigUpdater(os.path.join(BASE_DIR, ".env"))
+        target_env = os.path.join(ENGINE_DIR, ".env") if os.path.exists(os.path.join(ENGINE_DIR, ".env")) else os.path.join(BASE_DIR, ".env")
+        updater = EnvConfigUpdater(target_env)
         updater.update_keys({
             "TELEGRAM_BOT_TOKEN": token,
             "TELEGRAM_CHAT_ID": chat_id,
