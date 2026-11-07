@@ -251,9 +251,10 @@ class RiskAgent:
         pnl_usd: float
     ) -> Tuple[float, float, float, float]:
         """
-        Aplica Recomposição da Banca Base + Bola de Neve + Trava de Saque Mínimo da Binance (US$ 10).
-        Enquanto o valor separável para saque for menor que US$ 10.00, 100% do lucro fica
-        reinvestido no Capital de Giro multiplicando a banca.
+        Ao longo do dia, divide todo lucro realizado em:
+        - 60% reinvestido imediatamente no Capital de Giro (efeito bola de neve intradiário)
+        - 40% reservado no Pool de Saque Diário (aguardando a janela das 22h-23h BRT).
+        Se a banca estiver abaixo do piso base, recompõe o piso primeiro.
         Retorna (new_trading_balance, new_withdrawable_pool, added_to_withdraw, added_to_reinvest).
         """
         if pnl_usd <= 0:
@@ -264,11 +265,7 @@ class RiskAgent:
         surplus_above_floor = max(0.0, total_after_trade - self.base_capital_floor)
         candidate_withdraw = round(surplus_above_floor * WITHDRAW_PROFIT_RATIO, 2)
 
-        if withdrawable_pool + candidate_withdraw < MIN_WITHDRAWABLE_USD:
-            new_trading = round(total_after_trade, 2)
-            return new_trading, round(withdrawable_pool, 2), 0.0, round(pnl_usd, 2)
-
-        to_withdraw = min(round(pnl_usd, 2), candidate_withdraw)
+        to_withdraw = min(round(pnl_usd * WITHDRAW_PROFIT_RATIO, 2), candidate_withdraw)
         to_reinvest = round(pnl_usd - to_withdraw, 2)
 
         new_trading = round(trading_balance + to_reinvest, 2)

@@ -89,9 +89,9 @@ class TelegramNotifier:
             return ""
         brl_est = withdrawable_pool * 5.80
         status_saque = (
-            f"<b>US$ {withdrawable_pool:,.2f}</b> <i>(≈ R$ {brl_est:,.2f} — Liberado p/ Pix!)</i>"
-            if withdrawable_pool >= 10.0
-            else "US$ 0.00 <i>(Reinvestindo 100% até atingir o mínimo de US$ 10 p/ saque)</i>"
+            f"<b>US$ {withdrawable_pool:,.2f}</b> <i>(≈ R$ {brl_est:,.2f} — Reservado até 23h BRT!)</i>"
+            if withdrawable_pool > 0
+            else "US$ 0.00"
         )
         return (
             f"\n\n💼 <b>Sua Carteira Agora:</b>\n"

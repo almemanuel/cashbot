@@ -8,7 +8,7 @@ import os
 import sys
 import logging
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 
@@ -95,9 +95,11 @@ class TradingEngine:
         open_trades: List[Dict[str, Any]]
     ) -> Dict[str, float]:
         """
-        Detecta automaticamente aportes (depósitos) ou saques feitos diretamente na Binance
-        e atualiza o ledger antes mesmo da análise de novas oportunidades.
+        Detecta automaticamente aportes/saques na Binance e aplica a regra da Janela Diária de Saque:
+        - Antes das 23h BRT (WITHDRAW_WINDOW_END_BRT), mantém o Pool de Saque reservado para o usuário.
+        - Passou das 23h BRT, reincorpora o Pool de Saque não utilizado ao Capital de Giro!
         """
+        ledger = self._sweep_expired_withdraw_pool(ledger)
         locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
         expected_free = max(0.0, round(ledger["trading_balance"] + ledger["withdrawable_pool"] - locked_usd, 2))
         actual_free = round(self.exchange.fetch_free_usdt_balance(expected_free), 2)
@@ -107,6 +109,28 @@ class TradingEngine:
             return ledger
 
         return self._apply_cash_flow_diff(ledger, locked_usd, actual_free, diff)
+
+    def _sweep_expired_withdraw_pool(self, ledger: Dict[str, float]) -> Dict[str, float]:
+        pool = float(ledger.get("withdrawable_pool", 0.0))
+        if pool <= 0 or not self._is_past_withdraw_window_brt():
+            return ledger
+
+        new_trading = round(float(ledger["trading_balance"]) + pool, 2)
+        logger.info(
+            f"Janela de saque encerrada (pós-{self._withdraw_end_hour_brt()}h BRT): "
+            f"Reinvestindo ${pool:,.2f} não sacados no Capital de Giro -> ${new_trading:,.2f}"
+        )
+        self.db.update_ledger(new_trading, 0.0)
+        return {"trading_balance": new_trading, "withdrawable_pool": 0.0}
+
+    @staticmethod
+    def _withdraw_end_hour_brt() -> int:
+        return int(os.getenv("WITHDRAW_WINDOW_END_BRT", "23"))
+
+    @classmethod
+    def _is_past_withdraw_window_brt(cls) -> bool:
+        brt_now = datetime.now(timezone.utc) - timedelta(hours=3)
+        return brt_now.hour >= cls._withdraw_end_hour_brt()
 
     def _apply_cash_flow_diff(
         self,
@@ -131,9 +155,8 @@ class TradingEngine:
 
     @staticmethod
     def _compute_free_capital(ledger: Dict[str, float], open_trades: List[Dict[str, Any]]) -> float:
-        total_available = ledger["trading_balance"] + ledger["withdrawable_pool"]
         locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
-        return max(0.0, round(total_available - locked_usd, 2))
+        return max(0.0, round(ledger["trading_balance"] - locked_usd, 2))
 
     def _try_settle_open_trade(
         self,
@@ -142,8 +165,8 @@ class TradingEngine:
         delib: Optional[Deliberation] = None
     ) -> bool:
         """
-        Verifica se a posição atingiu o Take Profit de Day Trade ou gatilho de Realização Tática no Lucro.
-        Em Modo Perda Zero, jamais encerra posição no prejuízo.
+        Verifica se a posição atingiu o Take Profit ou gatilho de Realização Tática no Lucro.
+        Mesmo ao bater no ponto de venda, avalia se a tendência de alta segue forte para surfar mais rodadas!
         """
         entry_price = float(open_trade["entry_price"])
         take_profit = self._ensure_daytrade_take_profit(open_trade, entry_price)
@@ -160,15 +183,44 @@ class TradingEngine:
         current_price = float(check.get("current_price") or entry_price)
 
         if status == "CLOSED_TP":
+            if self._should_ride_strong_uptrend(open_trade, current_price, delib):
+                return False
             self._settle_closed_position(open_trade, "CLOSED_TP", float(check["exit_price"]), ledger)
             return True
 
         if self._should_lock_tactical_profit(open_trade, entry_price, current_price, delib):
+            if self._should_ride_strong_uptrend(open_trade, current_price, delib):
+                return False
             logger.info(f"Realização Tática de Day Trade acionada para {open_trade['symbol']} a ${current_price}!")
             self._settle_closed_position(open_trade, "CLOSED_TP", current_price, ledger)
             return True
 
         return False
+
+    def _should_ride_strong_uptrend(
+        self,
+        open_trade: Dict[str, Any],
+        current_price: float,
+        delib: Optional[Deliberation]
+    ) -> bool:
+        """
+        Se o ativo bateu no ponto de venda mas a tendência de alta continua forte (IA >= 68,
+        Preço > EMA20 > EMA50, acima da VWAP e RSI < 68 sem exaustão), sobe o alvo (+0.8%)
+        e aguarda mais rodadas para maximizar o lucro!
+        """
+        if delib is None or delib.veto or delib.final_score < 68.0:
+            return False
+        ind = delib.indicators
+        if not (ind.is_strong_uptrend and ind.is_above_vwap and ind.rsi14 < 68.0):
+            return False
+
+        new_tp = round(current_price * 1.008, 6 if current_price < 1.0 else 4)
+        self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
+        logger.info(
+            f"Tendência de alta forte em {open_trade['symbol']} (Score {delib.final_score:.1f}, RSI {ind.rsi14:.1f})! "
+            f"Segurando venda e subindo Take Profit para ${new_tp} (+0.8%)."
+        )
+        return True
 
     def _ensure_daytrade_take_profit(self, open_trade: Dict[str, Any], entry_price: float) -> float:
         current_tp = float(open_trade["take_profit"])
@@ -345,22 +397,11 @@ class TradingEngine:
 
     def _sync_free_balance_before_orders(self, ledger: Dict[str, float], locked_usd: float) -> float:
         """
-        Consulta o saldo livre real de USDT na Binance antes de emitir ordens:
-        - Se o usuário sacou na corretora (mesmo sem avisar no painel), usa apenas o saldo real que sobrou.
-        - Se o usuário não sacou o Pool de Saque, reincorpora o saldo disponível ao Capital de Giro (juros compostos).
+        Calcula o saldo livre para novas compras preservando o Pool de Saque durante o dia
+        (antes das 23h BRT). Apenas após as 23h BRT o Pool não sacado volta para o giro.
         """
-        expected_free_usd = max(0.0, round(ledger["trading_balance"] + ledger["withdrawable_pool"] - locked_usd, 2))
-        actual_free_usd = round(self.exchange.fetch_free_usdt_balance(expected_free_usd), 2)
-        new_trading_total = round(locked_usd + actual_free_usd, 2)
-
-        if ledger["withdrawable_pool"] > 0 or abs(new_trading_total - ledger["trading_balance"]) > 0.01:
-            logger.info(
-                f"Sincronizando saldo pré-ordem -> Livre: ${actual_free_usd:,.2f} | "
-                f"Investido: ${locked_usd:,.2f} | Capital de Giro Total: ${new_trading_total:,.2f}"
-            )
-            self.db.update_ledger(new_trading_total, 0.0)
-
-        return actual_free_usd
+        ledger = self._sweep_expired_withdraw_pool(ledger)
+        return max(0.0, round(ledger["trading_balance"] - locked_usd, 2))
 
     def _notify_no_opportunity(self, deliberations: List[Deliberation], ledger: Dict[str, float]) -> None:
         logger.info(f"Nenhum par atingiu a pontuação mínima de {MIN_SCORE_FOR_TRADE} ou houve veto aplicado.")

@@ -31,22 +31,20 @@ Para cada moeda, o motor calcula 250 velas de **15 minutos** e entrega ao Comit�
 
 ---
 
-### 3. Modo "Perda Zero" no Spot (`Hold 0% Perda`)
-* Como o robô opera exclusivamente no **Mercado Spot (sem alavancagem)**, a carteira detém o ativo real e **não sofre liquidação**.
-* **Sem Venda em Pânico na Queda:** Se o preço recuar após a compra, o robô **não se assusta nem realiza prejuízo no fundo** — ele mantém a posição em *Hold* aguardando a retomada do preço até atingir o **Take Profit** (`+2.0%` a `+5.5%`).
+### 3. Modo "Perda Zero" no Spot + Surfando Tendência de Alta (`Trailing Take Profit`)
+* **Sem Venda em Pânico na Queda:** Como opera no **Mercado Spot (sem alavancagem)**, se o preço recuar após a compra, o robô **não realiza prejuízo no fundo** — mantém em *Hold* até voltar ao lucro.
+* **Análise de Continuidade no Ponto de Venda (`_should_ride_strong_uptrend`):** Mesmo quando a moeda bate no ponto de venda, antes de encerrar a operação o robô verifica se a tendência de alta continua forte (`Score IA >= 68`, `Preço > EMA20 > EMA50`, acima da `VWAP` e `RSI < 68` sem exaustão). Se ainda houver força compradora, ele **segura a venda por mais rodadas** e sobe o alvo (`Take Profit`) em **`+0.8%`** para capturar toda a pernada de alta!
 
 ---
 
-### 4. Gestão Inteligente de Lucros (Bola de Neve + Saque Pix)
+### 4. Gestão Diária de Lucros e Janela de Saque (`22h às 23h BRT`)
 Toda vez que uma posição fecha no lucro (`CLOSED_TP`), o `RiskAgent` aplica:
-1. **Proteção do Piso da Banca:** Se o capital de giro estiver abaixo do piso configurado, 100% do lucro recompõe o caixa.
-2. **Divisão 60% Giro / 40% Saque com Trava Mínima de US$ 10:**
-   * **60%** do lucro vai direto para o **Capital de Giro** (efeito bola de neve).
-   * **40%** vai para o **Pool de Saque (Pix)**, desde que o acumulado atinja pelo menos **US$ 10.00** (mínimo da Binance). Enquanto for menor que US$ 10, 100% é reinvestido automaticamente no giro.
-3. **Sincronização Automática de Saldo Antes das Ordens (`_sync_free_balance_before_orders`):**
-   * Antes de abrir qualquer nova posição, o robô consulta o **saldo livre real de USDT na Binance** (`fetch_free_usdt_balance`):
-   * **Se você sacou na corretora (mesmo sem avisar no painel):** O robô detecta automaticamente o saldo real menor na Binance e dimensiona as compras apenas com o que de fato está na conta.
-   * **Se você não sacou o valor sugerido:** O robô reincorpora automaticamente o saldo disponível ao Capital de Giro para maximizar os juros compostos (* o botão `"Já Saquei"` no painel serve apenas para quando você quiser simular uma retirada durante o Modo Simulação*).
+1. **Distribuição Ao Longo do Dia (60% Giro / 40% Saque):**
+   * **60%** do lucro é reinvestido imediatamente no **Capital de Giro** (bola de neve intradiária).
+   * **40%** vai acumulando na caixinha **Disponível para Saque (Pix)**, ficando protegido e reservado durante todo o dia para você usar se quiser.
+2. **Janela Diária de Saque (`WITHDRAW_WINDOW_START_BRT=22` até `WITHDRAW_WINDOW_END_BRT=23` no `.env`):**
+   * Você tem até as **23h (Horário de Brasília)** para decidir sacar o lucro acumulado no dia.
+   * **Passou das 23h BRT:** Se você não sacou, o robô entende que você quis deixar render e **reincorpora automaticamente 100% do saldo de saque ao Capital de Giro** para investir tudo novamente!
 
 ---
 
