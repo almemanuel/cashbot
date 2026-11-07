@@ -59,7 +59,7 @@ class TradingEngine:
         self._check_all_open_trades(open_trades)
 
         remaining_open = self.db.get_open_trades()
-        updated_ledger = self.db.get_ledger()
+        updated_ledger = self._reconcile_exchange_cash_flow(self.db.get_ledger(), remaining_open)
         free_capital = self._compute_free_capital(updated_ledger, remaining_open)
 
         if len(remaining_open) >= 3 or free_capital < 12.0:
@@ -86,6 +86,46 @@ class TradingEngine:
         for trade in open_trades:
             current_ledger = self.db.get_ledger()
             self._try_settle_open_trade(trade, current_ledger)
+
+    def _reconcile_exchange_cash_flow(
+        self,
+        ledger: Dict[str, float],
+        open_trades: List[Dict[str, Any]]
+    ) -> Dict[str, float]:
+        """
+        Detecta automaticamente aportes (depósitos) ou saques feitos diretamente na Binance
+        e atualiza o ledger antes mesmo da análise de novas oportunidades.
+        """
+        locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
+        expected_free = max(0.0, round(ledger["trading_balance"] + ledger["withdrawable_pool"] - locked_usd, 2))
+        actual_free = round(self.exchange.fetch_free_usdt_balance(expected_free), 2)
+        diff = round(actual_free - expected_free, 2)
+
+        if abs(diff) <= 0.05:
+            return ledger
+
+        return self._apply_cash_flow_diff(ledger, locked_usd, actual_free, diff)
+
+    def _apply_cash_flow_diff(
+        self,
+        ledger: Dict[str, float],
+        locked_usd: float,
+        actual_free: float,
+        diff: float
+    ) -> Dict[str, float]:
+        if diff > 0:
+            new_trading = round(ledger["trading_balance"] + diff, 2)
+            new_pool = round(ledger["withdrawable_pool"], 2)
+            logger.info(f"Novo aporte detectado na Binance (+${diff:,.2f})! Capital de Giro: ${new_trading:,.2f}")
+            self.db.update_ledger(new_trading, new_pool)
+            return {"trading_balance": new_trading, "withdrawable_pool": new_pool}
+
+        withdrawn = abs(diff)
+        new_pool = max(0.0, round(ledger["withdrawable_pool"] - withdrawn, 2))
+        new_trading = max(0.0, round(locked_usd + actual_free - new_pool, 2))
+        logger.info(f"Saque detectado na Binance (-${withdrawn:,.2f})! Saldo sincronizado.")
+        self.db.update_ledger(new_trading, new_pool)
+        return {"trading_balance": new_trading, "withdrawable_pool": new_pool}
 
     @staticmethod
     def _compute_free_capital(ledger: Dict[str, float], open_trades: List[Dict[str, Any]]) -> float:
