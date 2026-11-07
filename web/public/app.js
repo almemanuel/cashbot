@@ -186,25 +186,35 @@ function renderData(data) {
       : `<i class="fa-regular fa-clock text-[9px]"></i> Última análise: Aguardando 1º ciclo`;
   }
 
-  // 1. Ledger e Pool de Retirada
+  // 1. Ledger, Valor Investido e Pool de Retirada
+  const openTrades = (data.open_trades && data.open_trades.length > 0)
+    ? data.open_trades
+    : (openTrade && openTrade.status === 'OPEN_OCO' ? [openTrade] : []);
+
+  const investedUsd = openTrades.reduce(
+    (acc, t) => acc + (Number(t.entry_price || 0) * Number(t.quantity || 0)),
+    0
+  );
   const withdrawable = Number(ledger.withdrawable_pool || 0);
   const trading = Number(ledger.trading_balance || 0);
+  const freeTrading = Math.max(0, trading - investedUsd);
   const total = withdrawable + trading;
   const brlRate = 5.80;
 
   document.getElementById('withdrawableUsd').innerText = `$${withdrawable.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   document.getElementById('withdrawableBrl').innerText = `≈ R$ ${(withdrawable * brlRate).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  document.getElementById('tradingBalanceUsd').innerText = `$${trading.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  document.getElementById('tradingBalanceUsd').innerText = `$${freeTrading.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const investedEl = document.getElementById('investedBalanceUsd');
+  if (investedEl) {
+    investedEl.innerText = `$${investedUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
   document.getElementById('totalPortfolioUsd').innerText = `$${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  renderPortfolioChart(ledgerHistory, trades, trading, withdrawable);
+  renderPortfolioChart(ledgerHistory, trades, openTrades, trading, withdrawable, investedUsd);
 
   // 2. Posições Abertas (Multi-Posição / Diversificação)
   const openContent = document.getElementById('openTradeContent');
   const badgeStatus = document.getElementById('badgeTradeStatus');
-  const openTrades = (data.open_trades && data.open_trades.length > 0)
-    ? data.open_trades
-    : (openTrade && openTrade.status === 'OPEN_OCO' ? [openTrade] : []);
 
   if (openTrades.length > 0) {
     badgeStatus.className = 'text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 animate-pulse';
@@ -368,8 +378,30 @@ function renderData(data) {
   }
 }
 
+// Converte string de data do banco em timestamp numérico (ms)
+function parseDbTimeMs(rawDateStr) {
+  if (!rawDateStr) return 0;
+  const normalized = String(rawDateStr).trim().replace(' ', 'T');
+  const iso = /[Z+\-]\d{0,2}:?\d{0,2}$/.test(normalized) ? normalized : `${normalized}Z`;
+  const ms = new Date(iso).getTime();
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+// Calcula quanto estava investido em posições abertas em um determinado instante (ms)
+function computeInvestedAtTime(timeMs, allTrades) {
+  if (!timeMs) return 0;
+  return allTrades.reduce((acc, t) => {
+    const startMs = parseDbTimeMs(t.created_at);
+    const endMs = t.closed_at ? parseDbTimeMs(t.closed_at) : Infinity;
+    if (startMs > 0 && startMs <= timeMs + 1000 && timeMs < endMs) {
+      return acc + (Number(t.entry_price || 0) * Number(t.quantity || 0));
+    }
+    return acc;
+  }, 0);
+}
+
 // Renderiza Gráfico de Evolução Patrimonial (Chart.js)
-function renderPortfolioChart(history, trades, currentTrading, currentWithdraw) {
+function renderPortfolioChart(history, trades, openTrades, currentTrading, currentWithdraw, currentInvested) {
   const canvas = document.getElementById('portfolioChart');
   if (!canvas || typeof Chart === 'undefined') return;
 
@@ -386,16 +418,43 @@ function renderPortfolioChart(history, trades, currentTrading, currentWithdraw) 
       : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20';
   }
 
-  const points = history.length > 0
-    ? history
-    : [{ trading_balance: currentTrading, withdrawable_pool: currentWithdraw, updated_at: 'Agora' }];
+  const basePoints = history.length > 0
+    ? history.map(p => {
+        const tMs = parseDbTimeMs(p.updated_at);
+        return {
+          trading_balance: Number(p.trading_balance || 0),
+          withdrawable_pool: Number(p.withdrawable_pool || 0),
+          invested_usd: computeInvestedAtTime(tMs, trades),
+          updated_at: p.updated_at,
+        };
+      })
+    : [{
+        trading_balance: currentTrading,
+        withdrawable_pool: currentWithdraw,
+        invested_usd: currentInvested,
+        updated_at: new Date().toISOString(),
+      }];
+
+  const lastPoint = basePoints[basePoints.length - 1];
+  const hasNewOpenInvestment = Math.abs((lastPoint?.invested_usd || 0) - currentInvested) > 0.01;
+  const latestOpenTime = openTrades && openTrades.length > 0 ? openTrades[0].created_at : new Date().toISOString();
+
+  const points = hasNewOpenInvestment
+    ? [...basePoints, {
+        trading_balance: currentTrading,
+        withdrawable_pool: currentWithdraw,
+        invested_usd: currentInvested,
+        updated_at: latestOpenTime,
+      }]
+    : basePoints;
 
   const labels = points.map((p, idx) => {
     const formatted = formatTimestampBr(p.updated_at);
     return formatted ? formatted.replace(/\/\d{4} às /, ' ') : `Pt ${idx + 1}`;
   });
   const totalSeries = points.map(p => Number(p.trading_balance || 0) + Number(p.withdrawable_pool || 0));
-  const tradingSeries = points.map(p => Number(p.trading_balance || 0));
+  const investedSeries = points.map(p => Number(p.invested_usd || 0));
+  const freeTradingSeries = points.map(p => Math.max(0, Number(p.trading_balance || 0) - Number(p.invested_usd || 0)));
   const withdrawSeries = points.map(p => Number(p.withdrawable_pool || 0));
 
   if (portfolioChartInstance) {
@@ -411,14 +470,23 @@ function renderPortfolioChart(history, trades, currentTrading, currentWithdraw) 
           label: 'Capital Total ($)',
           data: totalSeries,
           borderColor: '#10b981',
-          backgroundColor: 'rgba(16, 185, 129, 0.12)',
+          backgroundColor: 'rgba(16, 185, 129, 0.10)',
           borderWidth: 2.5,
           tension: 0.35,
           fill: true,
         },
         {
-          label: 'Capital de Giro ($)',
-          data: tradingSeries,
+          label: 'Valor Investido ($)',
+          data: investedSeries,
+          borderColor: '#a855f7',
+          backgroundColor: 'rgba(168, 85, 247, 0.14)',
+          borderWidth: 2,
+          tension: 0.35,
+          fill: true,
+        },
+        {
+          label: 'Caixa Livre ($)',
+          data: freeTradingSeries,
           borderColor: '#06b6d4',
           borderDash: [4, 4],
           borderWidth: 2,
