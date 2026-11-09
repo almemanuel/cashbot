@@ -262,8 +262,8 @@ class TelegramNotifier:
             line = f"✅ <b>Lucro da Rodada:</b> +US$ {pnl_usd:,.2f} (<b>+{pnl_pct:.2f}%</b>)"
             return header, line
         if outcome == "TIME_STOP":
-            header = "⏱️ <b>CashBot — Troca de Moeda por Tempo (48h)</b>"
-            line = f"🔄 <b>Ajuste de saída p/ destravar saldo:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.2f}%)"
+            header = "⏱️ <b>CashBot — Troca de Moeda por Tempo (3h)</b>"
+            line = f"🔄 <b>Ajuste de saída p/ destravar saldo:</b> {pnl_usd:+.2f} USD ({pnl_pct:+.2f}%)"
             return header, line
         header = "🛑 <b>CashBot — Disjuntor de Segurança (-7.5%) Acionado</b>"
         line = f"🛡️ <b>Perda travada p/ proteger a banca:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.2f}%)"

@@ -35,16 +35,16 @@ WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 MAX_DYNAMIC_PAIRS = 6
 MAX_OPEN_SLOTS = 4
 MIN_SCORE_FOR_TRADE = 63.0
-TACTICAL_PROFIT_MIN_PCT = 0.55
-TACTICAL_HOLD_MINUTES = 45.0
-ROTATION_MIN_CANDIDATE_SCORE = 72.0
-ROTATION_MAX_OPEN_SCORE = 55.0
-ROTATION_MIN_HOLD_MINUTES = 60.0
-ROTATION_MIN_PNL_PCT = -0.35
-ROTATION_MAX_PNL_PCT = 0.40
+TACTICAL_PROFIT_MIN_PCT = 0.40
+TACTICAL_HOLD_MINUTES = 20.0
+ROTATION_MIN_CANDIDATE_SCORE = 68.0
+ROTATION_MAX_OPEN_SCORE = 58.0
+ROTATION_MIN_HOLD_MINUTES = 30.0
+ROTATION_MIN_PNL_PCT = -1.0
+ROTATION_MAX_PNL_PCT = 0.50
 CATASTROPHE_STOP_PCT = 7.5
-TIME_STOP_MINUTES = 48.0 * 60.0
-TIME_STOP_MAX_LOSS_PCT = 2.0
+TIME_STOP_MINUTES = 3.0 * 60.0
+TIME_STOP_MAX_LOSS_PCT = 1.8
 ROUND_TRIP_FEE_RATE = 0.002
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
@@ -338,7 +338,7 @@ class TradingEngine:
         1. Take Profit curto (+0.8% a +2.2%) com análise de continuidade de alta (Trailing TP).
         2. Realização Tática no Lucro (>= +0.35% após 45min ou enfraquecimento).
         3. Disjuntor de Catástrofe (-7.5%) para evitar colapsos profundos sem cair em ruído curto.
-        4. Stop Temporal Inteligente (48h estagnado em faixa estreita para destravar capital).
+        4. Stop Temporal Inteligente (3h estagnado em faixa estreita para destravar capital).
         """
         entry_price = float(open_trade["entry_price"])
         take_profit = self._ensure_daytrade_take_profit(open_trade, entry_price)
@@ -357,6 +357,12 @@ class TradingEngine:
         )
         status = check["status"]
         current_price = float(check.get("current_price") or entry_price)
+
+        # Trailing Breakeven: se andou >= +0.25% a favor, puxa o stop para a entrada (risco zero)
+        if current_price >= entry_price * 1.0025 and stop_loss < entry_price:
+            stop_loss = entry_price
+            self.db.update_trade_stop_loss(int(open_trade["id"]), stop_loss)
+            logger.info(f"🛡️ Trailing Breakeven ativado em {open_trade['symbol']}: Stop movido para ${entry_price} (Risco Zero)!")
 
         if status == "CLOSED_TP":
             if self._should_ride_strong_uptrend(open_trade, current_price, delib):
@@ -378,7 +384,7 @@ class TradingEngine:
 
         if self._should_trigger_time_stop(open_trade, entry_price, current_price, delib):
             close_status = "CLOSED_TP" if current_price >= entry_price else "CLOSED_SL"
-            logger.info(f"Stop Temporal (48h sem evolução) acionado para {open_trade['symbol']} a ${current_price}!")
+            logger.info(f"Stop Temporal (3h sem evolução) acionado para {open_trade['symbol']} a ${current_price}!")
             self._settle_closed_position(open_trade, close_status, current_price, ledger, "TIME_STOP")
             return True
 
@@ -415,14 +421,13 @@ class TradingEngine:
         if entry_price <= 0:
             return current_tp
         tp_pct = ((current_tp - entry_price) / entry_price) * 100.0
-        if tp_pct <= 2.25:
+        if tp_pct <= 0.85:
             return current_tp
 
-        new_tp = round(entry_price * 1.012, 6 if entry_price < 1.0 else 4)
+        new_tp = round(entry_price * 1.006, 6 if entry_price < 1.0 else 4)
         self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
         logger.info(
-            f"Alvo antigo de Swing Trade ({tp_pct:.1f}%) recalibrado para Day Trade (+1.2% -> ${new_tp}) "
-            f"em {open_trade['symbol']}."
+            f"Alvo recalibrado para Day Trade Dinâmico / Scalping (+0.60% -> ${new_tp}) em {open_trade['symbol']}."
         )
         return new_tp
 
@@ -467,8 +472,8 @@ class TradingEngine:
         delib: Optional[Deliberation]
     ) -> bool:
         """
-        Stop Temporal Inteligente: se a operação completou 48h sem engatar e está apenas
-        andando de lado ou com recuo leve (até -2.0%) sem força compradora na IA,
+        Stop Temporal Inteligente: se a operação completou 3h sem engatar e está apenas
+        andando de lado ou com recuo leve (até -1.8%) sem força compradora na IA,
         encerra para destravar o capital e girar em oportunidades melhores.
         """
         if entry_price <= 0:
