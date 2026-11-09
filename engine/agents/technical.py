@@ -179,12 +179,12 @@ Analise os dados quantitativos intradiários (15m) de {symbol}:
 - RSI 14 (15m): {ind.rsi14} | ATR 14 (15m): ${ind.atr14}
 
 Técnicas de Day Trade Quantitativo a aplicar:
-1. GATILHO DE COMPRA DE ALTA PROBABILIDADE (Nota 68 a 94):
+1. GATILHO DE COMPRA DE ALTA PROBABILIDADE (Nota 60 a 94):
    - Pullback na VWAP ou EMA 20 com retomada compradora (RSI entre 38 e 64), OU
    - Reversão na Banda de Bollinger Inferior com defesa compradora, OU
    - Breakout com Volume Institucional (`volume_ratio >= 1.2x`) e espaço livre até a Banda Superior.
-2. ALVO CURTO CIRÚRGICO (`take_profit_pct` entre `0.8` e `2.2`):
-   - Escolha um alvo curto e rápido (ex: `0.9%` a `1.8%`) posicionado antes da resistência imediata / Banda de Bollinger Superior para realizar lucro rápido no próximo ciclo de 15 minutos!
+2. ALVO CURTO CIRÚRGICO (`take_profit_pct` entre `0.45` e `1.0`):
+   - Escolha um alvo curto e rápido (ex: `0.5%` a `0.8%`) posicionado antes da resistência imediata / Banda de Bollinger Superior para realizar lucro rápido no próximo ciclo de 15 minutos!
 3. VETO DE COMPRA DE TOPO (`veto: true` ou nota < 55):
    - Jamais compre ativo já esticado acima da Banda de Bollinger Superior com RSI > 72 (exaustão de topo).
 4. REGRA DE LINGUAGEM PARA LEIGOS NO CAMPO `reasoning`:
