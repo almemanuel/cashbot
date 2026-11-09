@@ -99,6 +99,14 @@ class TradingEngine:
 
         self._decide_and_execute(deliberations, updated_ledger, remaining_open, notify_wait=bypass_cooldown)
 
+    def _is_duplicate_scheduled_cycle(self, force_opportunity: bool, bypass_cooldown: bool) -> bool:
+        if force_opportunity or bypass_cooldown:
+            return False
+        if not self.db.has_recent_consensus(minutes=12):
+            return False
+        logger.info("Ciclo automático já executado há menos de 12 min por outra instância. Pulando duplicata.")
+        return True
+
     def _try_rotate_stagnant_position(
         self,
         open_trades: List[Dict[str, Any]],
