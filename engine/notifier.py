@@ -89,14 +89,14 @@ class TelegramNotifier:
             return ""
         brl_est = withdrawable_pool * 5.80
         status_saque = (
-            f"<b>US$ {withdrawable_pool:,.2f}</b> <i>(≈ R$ {brl_est:,.2f} — Reservado até 23h BRT!)</i>"
+            f"<b>US$ {withdrawable_pool:,.2f}</b> <i>(≈ R$ {brl_est:,.2f} — Reserva Protegida)</i>"
             if withdrawable_pool > 0
             else "US$ 0.00"
         )
         return (
             f"\n\n💼 <b>Sua Carteira Agora:</b>\n"
             f"• 🔄 <b>Capital de Giro Ativo:</b> US$ {trading_balance:,.2f}\n"
-            f"• 💸 <b>Valor Sugerido p/ Saque (Pix):</b> {status_saque}"
+            f"• 💸 <b>Reserva Protegida p/ Saque:</b> {status_saque}"
         )
 
     @staticmethod
@@ -203,7 +203,7 @@ class TelegramNotifier:
             f"{profit_line}"
             f"• 📈 <b>Total Operando nas Moedas:</b> US$ {invested_total:,.2f}\n"
             f"• 💵 <b>Caixa Livre p/ Compras:</b> US$ {free_cash:,.2f}\n"
-            f"• 💸 <b>Guardado p/ Saque Hoje:</b> US$ {withdrawable_pool:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>"
+            f"• 💸 <b>Reserva Protegida p/ Saque:</b> US$ {withdrawable_pool:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>"
         )
 
     def notify_order_closed(
@@ -288,9 +288,9 @@ class TelegramNotifier:
                 f"• 🎯 <b>Falta recuperar:</b> US$ {unrecovered_loss_usd:,.2f}\n\n"
             )
         return (
-            f"🏦 <b>Para onde foi esse lucro:</b>\n"
-            f"• 🔄 <b>Somado ao Capital de Giro:</b> +US$ {to_reinvest:,.2f}\n"
-            f"• 💸 <b>Separado p/ seu Saque Hoje:</b> +US$ {to_withdraw:,.2f}\n\n"
+            f"🏦 <b>Divisão do Lucro Líquido:</b>\n"
+            f"• 💸 <b>Separado p/ seu Saque (90%):</b> +US$ {to_withdraw:,.2f}\n"
+            f"• 🔄 <b>Reinvestido no Capital (10%):</b> +US$ {to_reinvest:,.2f}\n\n"
         )
 
     def notify_end_of_day_summary(
@@ -320,7 +320,7 @@ class TelegramNotifier:
             f"• 📈 <b>Moedas em andamento ({open_count}):</b> US$ {invested_usd:,.2f} investidos aguardando meta de lucro\n"
             f"• 💵 <b>Caixa Livre em Conta:</b> US$ {free_cash:,.2f}\n\n"
             f"{withdraw_guide}\n\n"
-            f"⏸️ <b>Pausa Programada ({start_hour}h às {end_hour}h):</b> O robô não fará compras nem vendas nesta 1 hora para você sacar com tranquilidade sem bagunçar o saldo."
+            f"⏸️ <b>Pausa Noturna ({start_hour}h às {end_hour}h):</b> Pausa estratégica de 1h antes do reinício do próximo ciclo diário."
         )
         return self.send_message(msg)
 
@@ -329,13 +329,13 @@ class TelegramNotifier:
         brl_est = pool * 5.80
         if pool >= 10.0:
             return (
-                f"✅ <b>Saque Liberado (Acima do mínimo de US$ 10):</b>\n"
-                f"Você tem <b>US$ {pool:,.2f}</b> <i>(≈ R$ {brl_est:,.2f})</i> separados para saque!\n"
-                f"👉 Se quiser sacar na Binance, faça até as <b>{end_hour}h</b>. Caso não saque até lá, esse valor será somado automaticamente ao capital para investir mais forte amanhã!"
+                f"✅ <b>Reserva Disponível para Saque:</b>\n"
+                f"Você tem <b>US$ {pool:,.2f}</b> <i>(≈ R$ {brl_est:,.2f})</i> protegidos na sua reserva!\n"
+                f"👉 Esse valor está acima do mínimo de saque da Binance (US$ 10.00 / R$ 10,00 Pix). Você pode sacar a qualquer momento via Pix na Binance. Se preferir não sacar agora, o valor continuará guardado em segurança na sua reserva!"
             )
         return (
-            f"💸 <b>Reserva de Lucro Hoje:</b> US$ {pool:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>\n"
-            f"ℹ️ Como o valor ainda está abaixo do mínimo de saque da Binance (<b>US$ 10.00</b>), às <b>{end_hour}h</b> o robô vai juntar automaticamente esse lucro ao seu capital para render mais no próximo dia!"
+            f"💸 <b>Reserva Protegida para Saque:</b> US$ {pool:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>\n"
+            f"ℹ️ O valor segue acumulando na sua reserva até atingir o mínimo de saque (<b>US$ 10.00</b> ou R$ 10 no Pix). Ele continuará guardado e protegido na virada do dia!"
         )
 
     def notify_daily_restart(
@@ -344,22 +344,63 @@ class TelegramNotifier:
         free_cash: float,
         invested_usd: float,
         open_count: int,
-        swept_pool: float = 0.0
+        withdrawable_pool: float = 0.0
     ) -> bool:
         """Notifica a retomada de operações às 23h BRT informando o capital total considerado."""
-        reinvest_note = (
-            f"• 🔄 <b>Lucro de hoje reinvestido no giro:</b> +US$ {swept_pool:,.2f}\n"
-            if swept_pool > 0
+        brl_est = withdrawable_pool * 5.80
+        reserve_note = (
+            f"• 💸 <b>Reserva Protegida p/ Saque:</b> US$ {withdrawable_pool:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>\n"
+            if withdrawable_pool > 0
             else ""
         )
         msg = (
             f"🚀 <b>CashBot — Iniciando Novo Ciclo Diário!</b>\n\n"
-            f"A janela de saque encerrou e o robô voltou a operar considerando o capital disponível na sua conta:\n\n"
-            f"💼 <b>Capital Total em Operação:</b> <b>US$ {total_capital:,.2f}</b>\n"
-            f"{reinvest_note}"
+            f"O robô voltou a operar no mercado mantendo sua reserva de saque 100% protegida:\n\n"
+            f"💼 <b>Capital de Giro Ativo:</b> <b>US$ {total_capital:,.2f}</b>\n"
+            f"{reserve_note}"
             f"• 💵 <b>Caixa Livre para Novas Compras:</b> US$ {free_cash:,.2f}\n"
             f"• 📈 <b>Já Investido ({open_count} moedas ativas):</b> US$ {invested_usd:,.2f}\n\n"
             f"<i>Boas operações! Você receberá um aviso a cada compra ou venda realizada.</i>"
+        )
+        return self.send_message(msg)
+
+    def notify_deposit_detected(
+        self,
+        amount_usd: float,
+        new_trading_balance: float,
+        withdrawable_pool: float,
+    ) -> bool:
+        """Notifica quando um novo aporte/depósito na Binance é identificado pelo robô."""
+        brl_est = amount_usd * 5.80
+        total_balance = new_trading_balance + withdrawable_pool
+        msg = (
+            f"📥 <b>CashBot — Novo Depósito Identificado!</b>\n\n"
+            f"💵 <b>Valor depositado:</b> +US$ {amount_usd:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>\n"
+            f"✅ <b>Status:</b> O valor já foi adicionado ao seu Capital de Giro para novas operações!\n\n"
+            f"💼 <b>Sua Conta Agora:</b>\n"
+            f"• 🔄 <b>Capital de Giro Ativo:</b> US$ {new_trading_balance:,.2f}\n"
+            f"• 💸 <b>Reserva p/ Saque:</b> US$ {withdrawable_pool:,.2f}\n"
+            f"• 💰 <b>Total Geral:</b> US$ {total_balance:,.2f}"
+        )
+        return self.send_message(msg)
+
+    def notify_withdrawal_detected(
+        self,
+        amount_usd: float,
+        new_trading_balance: float,
+        new_pool: float,
+    ) -> bool:
+        """Notifica quando um saque na Binance é identificado pelo robô."""
+        brl_est = amount_usd * 5.80
+        total_balance = new_trading_balance + new_pool
+        msg = (
+            f"📤 <b>CashBot — Saque Identificado!</b>\n\n"
+            f"💸 <b>Valor sacado:</b> -US$ {amount_usd:,.2f} <i>(≈ R$ {brl_est:,.2f})</i>\n"
+            f"✅ <b>Status:</b> Saldo sincronizado com a Binance com sucesso.\n\n"
+            f"💼 <b>Sua Conta Agora:</b>\n"
+            f"• 🔄 <b>Capital de Giro Ativo:</b> US$ {new_trading_balance:,.2f}\n"
+            f"• 💸 <b>Reserva p/ Saque:</b> US$ {new_pool:,.2f}\n"
+            f"• 💰 <b>Total Geral:</b> US$ {total_balance:,.2f}"
         )
         return self.send_message(msg)
 

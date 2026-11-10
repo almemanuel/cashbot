@@ -234,11 +234,11 @@ class TradingEngine:
         total_capital = round(float(updated_ledger["trading_balance"]) + float(updated_ledger["withdrawable_pool"]), 2)
 
         self.notifier.notify_daily_restart(
-            total_capital=total_capital,
+            total_capital=float(updated_ledger["trading_balance"]),
             free_cash=free_cash,
             invested_usd=invested_usd,
             open_count=len(open_trades),
-            swept_pool=pool_before,
+            withdrawable_pool=float(updated_ledger["withdrawable_pool"]),
         )
         self.db.save_system_marker("SYSTEM/RESTART", f"Reinício diário notificado com capital ${total_capital:,.2f}")
 
@@ -275,17 +275,11 @@ class TradingEngine:
         return self._apply_cash_flow_diff(ledger, locked_usd, actual_free, diff)
 
     def _sweep_expired_withdraw_pool(self, ledger: Dict[str, float]) -> Dict[str, float]:
-        pool = float(ledger.get("withdrawable_pool", 0.0))
-        if pool <= 0 or not self._is_past_withdraw_window_brt():
-            return ledger
-
-        new_trading = round(float(ledger["trading_balance"]) + pool, 2)
-        logger.info(
-            f"Janela de saque encerrada (pós-{self._withdraw_end_hour_brt()}h BRT): "
-            f"Reinvestindo ${pool:,.2f} não sacados no Capital de Giro -> ${new_trading:,.2f}"
-        )
-        self.db.update_ledger(new_trading, 0.0)
-        return {"trading_balance": new_trading, "withdrawable_pool": 0.0}
+        """
+        Mantém a Reserva de Saque (withdrawable_pool) permanentemente protegida,
+        inclusive na virada do dia (23h BRT), acumulando valores para o usuário usar no dia a dia.
+        """
+        return ledger
 
     @staticmethod
     def _withdraw_start_hour_brt() -> int:
@@ -322,6 +316,7 @@ class TradingEngine:
             new_pool = round(ledger["withdrawable_pool"], 2)
             logger.info(f"Novo aporte detectado na Binance (+${diff:,.2f})! Capital de Giro: ${new_trading:,.2f}")
             self.db.update_ledger(new_trading, new_pool)
+            self.notifier.notify_deposit_detected(diff, new_trading, new_pool)
             return {"trading_balance": new_trading, "withdrawable_pool": new_pool}
 
         withdrawn = abs(diff)
@@ -329,6 +324,7 @@ class TradingEngine:
         new_trading = max(0.0, round(locked_usd + actual_free - new_pool, 2))
         logger.info(f"Saque detectado na Binance (-${withdrawn:,.2f})! Saldo sincronizado.")
         self.db.update_ledger(new_trading, new_pool)
+        self.notifier.notify_withdrawal_detected(withdrawn, new_trading, new_pool)
         return {"trading_balance": new_trading, "withdrawable_pool": new_pool}
 
     @staticmethod
