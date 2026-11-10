@@ -26,7 +26,7 @@ BINANCE_PUBLIC_ENDPOINTS = (
     "https://api.binance.com/api/v3",
     "https://api1.binance.com/api/v3",
 )
-CORE_WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+CORE_WATCHLIST = ["SOL/USDT", "NEAR/USDT", "PEPE/USDT", "SUI/USDT"]
 SYNTHETIC_BASE_PRICES = {
     "BTC/USDT": 92000.0,
     "ETH/USDT": 3400.0,
@@ -37,7 +37,8 @@ SYNTHETIC_BASE_PRICES = {
 }
 EXCLUDED_BASES = {
     "USDC", "FDUSD", "USDT", "DAI", "TUSD", "BUSD", "USDP",
-    "USDE", "EUR", "GBP", "PAXG", "WBTC", "USD1", "First"
+    "USDE", "EUR", "GBP", "PAXG", "WBTC", "USD1", "First",
+    "BTC", "ETH"
 }
 LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR")
 MIN_QUOTE_VOLUME_USD = 35_000_000.0
@@ -142,13 +143,15 @@ class ExchangeClient:
 
     @staticmethod
     def _score_ticker_momentum(ticker: Dict[str, Any]) -> float:
-        """Combina força compradora no dia (1% a 12% ideal) com liquidez institucional."""
+        """Prioriza altcoins líquidas com forte aceleração e volatilidade para Day Trade rápido."""
         change_pct = float(ticker.get("priceChangePercent", 0.0))
         quote_vol_millions = float(ticker.get("quoteVolume", 0.0)) / 1_000_000.0
-        vol_bonus = min(30.0, quote_vol_millions / 25.0)
-        if 1.0 <= change_pct <= 12.0:
-            return 50.0 + (change_pct * 3.0) + vol_bonus
-        return change_pct + vol_bonus
+        vol_bonus = min(10.0, quote_vol_millions / 20.0)
+        if 2.0 <= change_pct <= 18.0:
+            return 50.0 + (change_pct * 4.0) + vol_bonus
+        if 0.5 <= change_pct < 2.0:
+            return 40.0 + (change_pct * 2.0) + vol_bonus
+        return max(0.0, change_pct) + vol_bonus
 
     @staticmethod
     def _to_slash_symbol(raw_symbol: str) -> str:

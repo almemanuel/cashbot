@@ -340,26 +340,28 @@ class SentimentAgent:
     @staticmethod
     def _build_prompt(symbol: str, fng: FearAndGreed, headlines: HeadlineCollection) -> str:
         return f"""
-Você é um Analista de Fluxo, Narrativa e Notícias para GIRO RÁPIDO (Short-Term Swing Trade) em Criptoativos.
-O objetivo é avaliar se o humor atual e as manchetes de {symbol} favorecem um tiro curto de alta (+3% a +8%) nas próximas 24h a 72h.
+Você é um Analista de Fluxo, Narrativa e Notícias para DAY TRADE / SCALPING INTRADAY em Criptoativos.
+O objetivo é avaliar se o humor atual e as notícias de {symbol} favorecem uma operação rápida intradiária (tiro curto de +0.8% a +2.0% em minutos ou poucas horas) HOJE.
 
 Dados atuais:
 - Crypto Fear & Greed Index (Macro): {fng.value}/100 ({fng.classification})
 - Últimas Manchetes de {symbol}:
 {headlines.format_bullet_list()}
 
-Critérios para Giro Rápido:
-1. Dê nota alta (70 a 92) se houver narrativa positiva de curto prazo, entrada de fluxo comprador, interesse do mercado ou ausência de notícias negativas travando o ativo.
-2. Veto (veto: true) IMEDIATO se as manchetes relatarem hack, exploit, parada na rede (outage/halt), despejo massivo (token unlock/dump) ou processo grave contra {symbol}.
-3. Se o mercado estiver neutro/cauteloso mas sem risco específico contra {symbol}, atribua nota moderada (60 a 72) para não travar bons setups gráficos de repique.
+Critérios para Day Trade / Scalping:
+1. Dê nota alta (70 a 92) se houver narrativa positiva no momento, entrada de fluxo comprador, interesse imediato do mercado ou ausência de notícias negativas travando a moeda agora.
+2. Veto (veto: true) IMEDIATO se as manchetes relatarem hack, exploit, parada na rede (outage/halt), despejo massivo (dump) ou risco grave imediato contra {symbol}.
+3. Se o mercado estiver neutro/cauteloso mas sem risco específico contra {symbol}, atribua nota moderada (60 a 72) para viabilizar operações de repique e rompimento rápido.
 4. REGRA DE LINGUAGEM PARA LEIGOS NO CAMPO `reasoning`:
-   - Escreva em **1 frase curta, simples e direta para um investidor leigo**, sem termos técnicos difíceis (como "macro", "ETFs", "sistêmico", "repique"). Diga de forma clara se as notícias do dia estão positivas ou tranquilas para a moeda subir.
+   - Escreva em **1 frase curta, simples e humana para um investidor leigo**, sem termos técnicos difíceis.
+   - Explique se o clima das notícias neste momento está favorável para uma valorização rápida hoje.
+   - PROIBIDO: NUNCA use expressões como "nos próximos dias", "longo prazo" ou "médio prazo". Estamos operando Day Trade (operações rápidas de minutos a poucas horas).
 
 Responda EXCLUSIVAMENTE em formato JSON com o schema:
 {{
   "score": <número float 0-100>,
   "veto": <true ou false>,
-  "reasoning": "<1 frase simples e amigável em português para leigos sobre o clima das notícias da moeda>"
+  "reasoning": "<1 frase simples e amigável em português para leigos sobre o clima imediato das notícias da moeda>"
 }}
 """
 
@@ -407,12 +409,12 @@ Responda EXCLUSIVAMENTE em formato JSON com o schema:
     @staticmethod
     def _format_news_summary(collection: HeadlineCollection, news_delta: float) -> str:
         if collection.is_empty():
-            return "Noticiário tranquilo e sem nenhum alerta negativo para a moeda hoje."
+            return "Noticiário tranquilo e sem nenhum alerta negativo para a moeda no momento."
         if news_delta > 0:
-            return "As notícias recentes sobre a moeda são otimistas e ajudam na valorização."
+            return "As notícias recentes sobre a moeda são favoráveis para uma alta rápida hoje."
         if news_delta < 0:
-            return "O mercado está um pouco cauteloso hoje, mas sem nenhum problema grave com a moeda."
-        return "Noticiário calmo e sem riscos para operar no curto prazo."
+            return "O mercado está um pouco cauteloso hoje, mas sem risco grave para operações rápidas."
+        return "Noticiário calmo e livre de riscos para operar nesta rodada."
 
     @staticmethod
     def _resolve_tone_label(news_delta: float) -> str:
