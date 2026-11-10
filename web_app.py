@@ -251,6 +251,7 @@ class CashBotHandler(SimpleHTTPRequestHandler):
             "/api/confirm-withdraw": self._handle_confirm_withdraw,
             "/api/test-notification": self._handle_test_notification,
             "/api/save-config": self._handle_save_config,
+            "/api/reset-simulation": self._handle_reset_simulation,
         }
 
     def _execute_route_safely(
@@ -412,6 +413,11 @@ class CashBotHandler(SimpleHTTPRequestHandler):
             "TELEGRAM_CHAT_ID": chat_id,
         })
         self._send_json({"success": True, "message": "Credenciais salvas com sucesso!"})
+
+    def _handle_reset_simulation(self, payload: Dict[str, Any]) -> None:
+        initial = float(payload.get("initial_capital", 1000.0))
+        Database().reset_simulation(initial)
+        self._send_json({"success": True, "message": f"Simulação reiniciada com ${initial:,.2f} USD."})
 
 
 def run_server(port: int = 8080) -> None:

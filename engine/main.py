@@ -767,7 +767,13 @@ def main() -> None:
     parser.add_argument("--simulate", action="store_true", help="Força execução em modo simulação")
     parser.add_argument("--force-buy", action="store_true", help="Força aprovação de compra para teste de ponta a ponta e notificação")
     parser.add_argument("--test-notify", action="store_true", help="Envia mensagem de teste no Telegram")
+    parser.add_argument("--reset", action="store_true", help="Reseta a simulação, zera os trades e restaura o saldo de $1,000 USD")
     args = parser.parse_args()
+
+    if args.reset:
+        Database().reset_simulation(1000.0)
+        print("Simulação resetada para $1,000.00 USD!")
+        return
 
     if args.test_notify:
         _handle_test_notify()

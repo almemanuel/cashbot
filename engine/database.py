@@ -162,6 +162,18 @@ class Database:
             "INSERT INTO portfolio_ledger (trading_balance, withdrawable_pool) VALUES (1000.00, 0.00)"
         )
 
+    def reset_simulation(self, initial_capital: float = 1000.0) -> None:
+        """Reseta todo o histórico de simulação, zera posições e restaura a banca inicial."""
+        with self._session() as cur:
+            cur.execute("DELETE FROM trades;")
+            cur.execute("DELETE FROM consensus_logs;")
+            cur.execute("DELETE FROM portfolio_ledger;")
+            insert_sql = self._sql(
+                "INSERT INTO portfolio_ledger (trading_balance, withdrawable_pool) VALUES (?, ?)"
+            )
+            cur.execute(insert_sql, (initial_capital, 0.0))
+        logger.info(f"Simulação resetada com sucesso para banca inicial de ${initial_capital:,.2f}!")
+
     def get_ledger(self) -> Dict[str, float]:
         """Retorna o saldo de giro e o pool para saque."""
         with self._session() as cur:
