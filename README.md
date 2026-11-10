@@ -25,17 +25,17 @@ Para cada moeda, o motor calcula 250 velas de **15 minutos** e entrega ao Comit�
    * **EMAs (20, 50, 200), RSI 14 e ATR 14 no gráfico de 15m.**
 2. **Agente de Sentimento (`engine/agents/sentiment.py` — Peso 40%):**
    * Faz *prefetch* em lote (sem gargalo N+1) do índice **Fear & Greed** e das manchetes reais via **CryptoCompare News API** + fallback **Google News RSS**.
-3. **Diversificação Ágil (`engine/agents/risk.py`):**
-   * Moedas com **Nota Final $\ge$ 63/100** e **sem Veto** são aprovadas.
-   * O capital livre é dividido proporcionalmente às notas em **até 4 posições simultâneas**, acelerando o giro intradiário.
+3. **Modo Sniper de Alta Concentração (`engine/agents/risk.py`):**
+   * Moedas com **Nota Final $\ge$ 60/100** e **sem Veto** são aprovadas.
+   * O robô opera com **1 única posição concentrada por vez** (alocando 85% do capital na oportunidade número 1 absoluta do mercado), maximizando o ganho de cada ciclo e eliminando o risco quádruplo correlacionado.
 
 ---
 
 ### 3. Proteção Anti-Ruído, Disjuntor de Catástrofe (`-7.5%`), Rotação Ativa de Capital e Modo Recuperação 100%
-* **Imune a Ruído Curto (Sem Stop Curto):** Oscilações normais de mercado (`-1%` a `-7%`) não derrubam a posição; o robô aguarda a retomada sem realizar prejuízo bobo.
-* **Disjuntor de Catástrofe (`-7.5%`):** Mantém uma trava de emergência para proteger a banca contra colapsos severos (evitando que uma moeda derreta `-40%` ou `-80%`).
-* **Rotação Ativa de Capital (Custo de Oportunidade):** Mesmo com as 4 vagas cheias, o robô continua varrendo o mercado. Se encontrar uma oportunidade com nota altíssima ($\ge 72$) e houver uma moeda aberta estagnada há $>60$ min no zero-a-zero com nota fraca ($\le 55$), o robô encerra o ativo estagnado no empate e entra imediatamente na moeda mais explosiva!
-* **Stop Temporal Inteligente (`3h`):** Se uma operação completar **3 horas** estagnada (andando de lado ou com recuo leve de até `-1.8%` e sem força compradora na IA), o robô encerra para destravar o capital.
+* **Imune a Ruído Curto (Sem Stop Curto):** Oscilações normais de mercado não derrubam a posição antes do tempo; o robô aguarda a retomada sem realizar prejuízo bobo.
+* **Disjuntor de Catástrofe (`-7.5%`):** Mantém uma trava de emergência para proteger a banca contra colapsos severos.
+* **Rotação Ativa de Capital (Custo de Oportunidade):** Se o ativo aberto perder tração e surgir uma oportunidade mais forte ($\ge 62$), o robô rotaciona para o ativo mais explosivo.
+* **Stop Temporal Inteligente (`90min`):** Se a operação completar **90 minutos** sem engatar o lucro e sem força compradora na IA, encerra para destravar 100% do capital e girar na próxima oportunidade.
 * **Modo Recuperação 100% do Capital (*High-Water Mark*):** Se o Disjuntor ou Stop Temporal gerar qualquer perda, **100% dos próximos lucros** voltam direto para o **Capital de Giro** até recompor o capital original centavo por centavo.
 * **Análise de Continuidade no Ponto de Venda (`_should_ride_strong_uptrend`):** Mesmo quando a moeda bate no ponto de venda, antes de encerrar a operação o robô verifica se a tendência de alta continua forte (`Score IA >= 68`, `Preço > EMA20 > EMA50`, acima da `VWAP` e `RSI < 68` sem exaustão). Se ainda houver força compradora, ele **segura a venda por mais rodadas** e sobe o alvo (`Take Profit`) em **`+0.8%`** para capturar toda a pernada de alta!
 

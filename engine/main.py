@@ -33,7 +33,7 @@ logger = logging.getLogger("cashbot.main")
 
 WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 MAX_DYNAMIC_PAIRS = 6
-MAX_OPEN_SLOTS = 4
+MAX_OPEN_SLOTS = 1
 MIN_SCORE_FOR_TRADE = 60.0
 TACTICAL_PROFIT_MIN_PCT = 0.40
 TACTICAL_HOLD_MINUTES = 20.0
@@ -43,11 +43,20 @@ ROTATION_MIN_HOLD_MINUTES = 30.0
 ROTATION_MIN_PNL_PCT = -1.0
 ROTATION_MAX_PNL_PCT = 0.50
 CATASTROPHE_STOP_PCT = 7.5
-TIME_STOP_MINUTES = 3.0 * 60.0
+TIME_STOP_MINUTES = 90.0
 TIME_STOP_MAX_LOSS_PCT = 1.8
 ROUND_TRIP_FEE_RATE = 0.002
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
+
+
+def _round_price_dynamic(val: float) -> float:
+    """Preserva precisão para qualquer faixa de preço (inclusive sub-penny como PEPE)."""
+    if val < 0.001:
+        return round(val, 8)
+    if val < 1.0:
+        return round(val, 6)
+    return round(val, 4)
 
 
 class TradingEngine:
@@ -407,7 +416,7 @@ class TradingEngine:
         if not (ind.is_strong_uptrend and ind.is_above_vwap and ind.rsi14 < 68.0):
             return False
 
-        new_tp = round(current_price * 1.008, 6 if current_price < 1.0 else 4)
+        new_tp = _round_price_dynamic(current_price * 1.008)
         self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
         self.exchange.update_take_profit_order(str(open_trade["symbol"]), float(open_trade["quantity"]), new_tp)
         logger.info(
@@ -424,7 +433,7 @@ class TradingEngine:
         if tp_pct <= 0.85:
             return current_tp
 
-        new_tp = round(entry_price * 1.006, 6 if entry_price < 1.0 else 4)
+        new_tp = _round_price_dynamic(entry_price * 1.006)
         self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
         logger.info(
             f"Alvo recalibrado para Day Trade Dinâmico / Scalping (+0.60% -> ${new_tp}) em {open_trade['symbol']}."
@@ -439,7 +448,7 @@ class TradingEngine:
         if 7.0 <= sl_pct <= 8.5:
             return current_sl
 
-        new_sl = round(entry_price * (1.0 - (CATASTROPHE_STOP_PCT / 100.0)), 6 if entry_price < 1.0 else 4)
+        new_sl = _round_price_dynamic(entry_price * (1.0 - (CATASTROPHE_STOP_PCT / 100.0)))
         self.db.update_trade_stop_loss(int(open_trade["id"]), new_sl)
         logger.info(
             f"Stop antigo ({sl_pct:.1f}%) recalibrado para Disjuntor de Catástrofe (-{CATASTROPHE_STOP_PCT}% -> ${new_sl}) "
@@ -472,9 +481,9 @@ class TradingEngine:
         delib: Optional[Deliberation]
     ) -> bool:
         """
-        Stop Temporal Inteligente: se a operação completou 3h sem engatar e está apenas
-        andando de lado ou com recuo leve (até -1.8%) sem força compradora na IA,
-        encerra para destravar o capital e girar em oportunidades melhores.
+        Stop Temporal Inteligente (Modo Sniper): se a operação completou 90min sem atingir a meta
+        e a IA não indicar continuação forte (score < 62), encerra para destravar 100% do capital
+        para a próxima oportunidade rápida.
         """
         if entry_price <= 0:
             return False
@@ -483,7 +492,7 @@ class TradingEngine:
             return False
 
         unrealized_pct = ((current_price - entry_price) / entry_price) * 100.0
-        if unrealized_pct < -TIME_STOP_MAX_LOSS_PCT or unrealized_pct >= TACTICAL_PROFIT_MIN_PCT:
+        if unrealized_pct >= TACTICAL_PROFIT_MIN_PCT:
             return False
 
         return delib is None or delib.final_score < 62.0

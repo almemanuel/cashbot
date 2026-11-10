@@ -101,9 +101,10 @@ class ExchangeClient:
         ranked = sorted(eligible, key=self._score_ticker_momentum, reverse=True)
         discovered = [self._to_slash_symbol(t["symbol"]) for t in ranked]
 
-        merged = list(dict.fromkeys(CORE_WATCHLIST + discovered))
-        selected = merged[:max_pairs]
-        logger.info(f"Watchlist Dinâmica selecionada ({len(selected)} ativos): {selected}")
+        if not discovered:
+            return list(CORE_WATCHLIST)
+        selected = discovered[:max_pairs]
+        logger.info(f"Watchlist Dinâmica selecionada ({len(selected)} ativos de alto fluxo): {selected}")
         return selected
 
     def _fetch_24h_tickers(self) -> List[Dict[str, Any]]:

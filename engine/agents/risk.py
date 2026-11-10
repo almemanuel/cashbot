@@ -16,9 +16,9 @@ MAX_TP_PCT = 1.0
 DEFAULT_TP_PCT = 0.60
 BINANCE_MIN_NOTIONAL_USD = 10.0
 SAFE_MIN_SLOT_USD = 12.0
-MAX_CONCURRENT_POSITIONS = 4
+MAX_CONCURRENT_POSITIONS = 1
 MIN_WITHDRAWABLE_USD = 10.0
-DEFAULT_CAPITAL_USAGE_PCT = 0.96
+DEFAULT_CAPITAL_USAGE_PCT = 0.85
 REINVEST_PROFIT_RATIO = 0.60
 WITHDRAW_PROFIT_RATIO = 0.40
 
@@ -218,27 +218,16 @@ class RiskAgent:
         open_positions_count: int = 0
     ) -> List[float]:
         """
-        Divide o capital livre de forma inteligente entre as oportunidades aprovadas na rodada,
-        permitindo diversificar em até MAX_CONCURRENT_POSITIONS (3) ativos simultâneos
-        desde que cada posição receba pelo menos SAFE_MIN_SLOT_USD (US$ 12).
+        Modo Sniper: concentra o capital disponível (85%) na única melhor oportunidade do ranking.
         """
-        deployable = round(free_balance * self.capital_usage_pct, 2)
-        slots_left = max(0, MAX_CONCURRENT_POSITIONS - open_positions_count)
-        max_affordable_slots = int(deployable // SAFE_MIN_SLOT_USD)
-        allowed_count = min(len(scores), slots_left, max_affordable_slots)
-
-        if allowed_count <= 0:
+        if open_positions_count >= MAX_CONCURRENT_POSITIONS or not scores:
             return []
 
-        if allowed_count == 1 and open_positions_count == 0 and deployable >= (SAFE_MIN_SLOT_USD * 2.2):
-            return [round(deployable * 0.55, 2)]
+        deployable = round(free_balance * self.capital_usage_pct, 2)
+        if deployable < BINANCE_MIN_NOTIONAL_USD:
+            return []
 
-        selected_scores = scores[:allowed_count]
-        total_score = sum(selected_scores)
-        return [
-            round(deployable * (s / total_score), 2)
-            for s in selected_scores
-        ]
+        return [deployable]
 
     def allocate_trade_pnl(
         self,
