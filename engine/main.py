@@ -363,11 +363,11 @@ class TradingEngine:
         status = check["status"]
         current_price = float(check.get("current_price") or entry_price)
 
-        # Trailing Breakeven: se andou >= +0.25% a favor, puxa o stop para a entrada (risco zero)
-        if current_price >= entry_price * 1.0025 and stop_loss < entry_price:
-            stop_loss = entry_price
+        # Trailing Breakeven com Proteção de Taxa: se andou >= +0.30% a favor, puxa o stop para a entrada + taxa
+        if current_price >= entry_price * 1.0030 and stop_loss < entry_price:
+            stop_loss = _round_price_dynamic(entry_price * 1.001)
             self.db.update_trade_stop_loss(int(open_trade["id"]), stop_loss)
-            logger.info(f"🛡️ Trailing Breakeven ativado em {open_trade['symbol']}: Stop movido para ${entry_price} (Risco Zero)!")
+            logger.info(f"🛡️ Trailing Breakeven ativado em {open_trade['symbol']}: Stop movido para ${stop_loss} (Risco Zero com taxa protegida)!")
 
         if status == "CLOSED_TP":
             if self._should_ride_strong_uptrend(open_trade, current_price, delib):
@@ -415,6 +415,14 @@ class TradingEngine:
         new_tp = _round_price_dynamic(current_price * 1.008)
         self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
         self.exchange.update_take_profit_order(str(open_trade["symbol"]), float(open_trade["quantity"]), new_tp)
+        guaranteed_sl = _round_price_dynamic(current_price * 0.997)
+        if guaranteed_sl > float(open_trade["stop_loss"]):
+            self.db.update_trade_stop_loss(int(open_trade["id"]), guaranteed_sl)
+            logger.info(
+                f"Tendência de alta forte em {open_trade['symbol']} (Score {delib.final_score:.1f}, RSI {ind.rsi14:.1f})! "
+                f"Segurando venda e subindo Take Profit para ${new_tp} (+0.8%) com Lucro Garantido em ${guaranteed_sl}."
+            )
+            return True
         logger.info(
             f"Tendência de alta forte em {open_trade['symbol']} (Score {delib.final_score:.1f}, RSI {ind.rsi14:.1f})! "
             f"Segurando venda e subindo Take Profit para ${new_tp} (+0.8%)."
@@ -477,9 +485,11 @@ class TradingEngine:
         delib: Optional[Deliberation]
     ) -> bool:
         """
-        Stop Temporal Inteligente (Modo Sniper): se a operação completou 90min sem atingir a meta
-        e a IA não indicar continuação forte (score < 62), encerra para destravar 100% do capital
-        para a próxima oportunidade rápida.
+        Stop Temporal Soberano (Inspirado no AutoHedge): se a operação completou 90min
+        sem atingir a meta de lucro, o Agente de Risco encerra a posição para destravar 100%
+        do capital para a próxima oportunidade rápida.
+        A única exceção é se a posição já estiver no lucro (unrealized_pct >= +0.20%)
+        e com tendência muito forte (Score >= 75).
         """
         if entry_price <= 0:
             return False
@@ -491,7 +501,10 @@ class TradingEngine:
         if unrealized_pct >= TACTICAL_PROFIT_MIN_PCT:
             return False
 
-        return delib is None or delib.final_score < 62.0
+        if delib is not None and delib.final_score >= 75.0 and unrealized_pct > 0.20:
+            return False
+
+        return True
 
     @staticmethod
     def _compute_trade_age_minutes(created_at: Any) -> float:

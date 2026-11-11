@@ -185,8 +185,9 @@ Técnicas de Day Trade Quantitativo a aplicar:
    - Breakout com Volume Institucional (`volume_ratio >= 1.2x`) e espaço livre até a Banda Superior.
 2. ALVO CURTO CIRÚRGICO (`take_profit_pct` entre `0.45` e `1.0`):
    - Escolha um alvo curto e rápido (ex: `0.5%` a `0.8%`) posicionado antes da resistência imediata / Banda de Bollinger Superior para realizar lucro rápido no próximo ciclo de 15 minutos!
-3. VETO DE COMPRA DE TOPO (`veto: true` ou nota < 55):
-   - Jamais compre ativo já esticado acima da Banda de Bollinger Superior com RSI > 72 (exaustão de topo).
+3. VETOS INSTITUCIONAIS OBRIGATÓRIOS (`veto: true` ou nota < 50):
+   - VETO DE COMPRA DE TOPO: Jamais compre ativo já esticado acima da Banda de Bollinger Superior com RSI > 72 (exaustão de topo).
+   - VETO DE FACA CAINDO (Regra Bear Critic): Se o Preço estiver abaixo da EMA 50 e EMA 200 com Momentum 1h negativo (< -1.0%), VETO IMEDIATO. Não tente adivinhar fundo em ativo que está sangrando.
 4. REGRA DE LINGUAGEM PARA LEIGOS NO CAMPO `reasoning`:
    - Embora você faça toda a análise matemática acima, escreva o campo `reasoning` em **1 frase curta, simples e humana para um investidor leigo**, SEM usar siglas técnicas (`VWAP`, `EMA20`, `RSI`, `Bollinger`, `ATR`). Exemplo: "O preço deu uma recuada ficando barato e o volume de compras voltou a crescer com força, abrindo espaço para subir rápido."
 
@@ -264,8 +265,14 @@ Responda EXCLUSIVAMENTE em formato JSON com o seguinte schema:
 
     @staticmethod
     def _should_veto(ind: TechnicalIndicators, reasons: List[str]) -> bool:
+        if ind.is_falling_knife:
+            reasons.append("Faca caindo: preço abaixo das médias móveis de 50 e 200 com perda de força recente.")
+            return True
         if ind.is_oversold and not ind.is_above_ema50:
             reasons.append("Momento de queda forte, melhor aguardar estabilizar.")
+            return True
+        if ind.is_overbought and ind.current_price >= ind.bb_upper:
+            reasons.append("Ativo esticado no topo de Bollinger, risco alto de correção.")
             return True
         return False
 

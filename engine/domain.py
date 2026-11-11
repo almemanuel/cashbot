@@ -83,6 +83,10 @@ class TechnicalIndicators(DictCompatibleMixin):
         return self.rsi14 < 30.0
 
     @property
+    def is_falling_knife(self) -> bool:
+        return self.current_price < self.ema50 and self.current_price < self.ema200 and self.momentum_1h_pct < -1.0
+
+    @property
     def upside_to_7d_high_pct(self) -> float:
         if self.current_price <= 0 or self.recent_high_7d <= self.current_price:
             return 1.5
