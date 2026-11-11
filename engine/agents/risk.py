@@ -8,17 +8,17 @@ Segue Object Calisthenics (1 nível de indentação por método, sem else).
 import math
 from typing import List, Dict, Any, Tuple
 
-CATASTROPHE_STOP_PCT = 7.5
-MIN_STOP_PCT = 7.0
-MAX_STOP_PCT = 8.0
-MIN_TP_PCT = 0.45
-MAX_TP_PCT = 1.0
-DEFAULT_TP_PCT = 0.60
+DEFAULT_STOP_PCT = 1.50
+MIN_STOP_PCT = 1.20
+MAX_STOP_PCT = 1.80
+MIN_TP_PCT = 0.80
+MAX_TP_PCT = 3.00
+DEFAULT_TP_PCT = 1.50
 BINANCE_MIN_NOTIONAL_USD = 10.0
 SAFE_MIN_SLOT_USD = 12.0
 MAX_CONCURRENT_POSITIONS = 1
 MIN_WITHDRAWABLE_USD = 10.0
-DEFAULT_CAPITAL_USAGE_PCT = 0.85
+DEFAULT_CAPITAL_USAGE_PCT = 0.70
 REINVEST_PROFIT_RATIO = 0.10
 WITHDRAW_PROFIT_RATIO = 0.90
 
@@ -173,8 +173,8 @@ class RiskAgent:
         ai_tp_pct: float = 0.0
     ) -> Tuple[float, float, float]:
         """
-        Define o Disjuntor de Catástrofe (-7.5%) para evitar ruído curto mas proteger a banca
-        contra colapsos severos, mantendo o Take Profit curto de Day Trade (+0.8% a +2.2%).
+        Define o Stop Loss Técnico Estrutural (-1.2% a -1.8%) e o Take Profit de Day Trade (+0.8% a +3.0%).
+        Mantém a expectativa matemática estritamente positiva (Risco:Retorno >= 1:1 até 1:2).
         Retorna (stop_loss, take_profit, stop_distance).
         """
         stop_pct = self._resolve_stop_pct(entry_price, atr14, ai_stop_pct)
@@ -189,7 +189,14 @@ class RiskAgent:
 
     @staticmethod
     def _resolve_stop_pct(entry_price: float, atr14: float, ai_stop_pct: float) -> float:
-        return CATASTROPHE_STOP_PCT
+        if entry_price <= 0:
+            return DEFAULT_STOP_PCT
+        if ai_stop_pct > 0:
+            return round(max(MIN_STOP_PCT, min(MAX_STOP_PCT, ai_stop_pct)), 2)
+        if atr14 > 0:
+            atr_pct = (atr14 / entry_price) * 100.0 * 1.5
+            return round(max(MIN_STOP_PCT, min(MAX_STOP_PCT, atr_pct)), 2)
+        return DEFAULT_STOP_PCT
 
     @staticmethod
     def _resolve_tp_pct(stop_pct: float, ai_tp_pct: float) -> float:

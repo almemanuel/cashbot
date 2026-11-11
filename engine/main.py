@@ -42,8 +42,10 @@ ROTATION_MAX_OPEN_SCORE = 50.0
 ROTATION_MIN_HOLD_MINUTES = 30.0
 ROTATION_MIN_PNL_PCT = -0.15
 ROTATION_MAX_PNL_PCT = 0.40
-CATASTROPHE_STOP_PCT = 7.5
+DEFAULT_STOP_PCT = 1.50
+DEFAULT_TP_PCT = 1.50
 TIME_STOP_MINUTES = 90.0
+MAX_HOLD_MINUTES = 150.0
 TIME_STOP_MAX_LOSS_PCT = 1.8
 ROUND_TRIP_FEE_RATE = 0.002
 TECHNICAL_WEIGHT = 0.60
@@ -328,11 +330,11 @@ class TradingEngine:
         """
         entry_price = float(open_trade["entry_price"])
         take_profit = self._ensure_daytrade_take_profit(open_trade, entry_price)
-        stop_loss = self._ensure_catastrophe_stop_loss(open_trade, entry_price)
+        stop_loss = self._ensure_intraday_stop_loss(open_trade, entry_price)
 
         logger.info(
             f"Trade ativo #{open_trade['id']} ({open_trade['symbol']}): "
-            f"Entrada=${entry_price} | Alvo=${take_profit} | Disjuntor=${stop_loss}"
+            f"Entrada=${entry_price} | Alvo=${take_profit} | Stop Loss=${stop_loss}"
         )
         check = self.exchange.check_oco_status(
             symbol=open_trade["symbol"],
@@ -357,8 +359,8 @@ class TradingEngine:
             return True
 
         if status == "CLOSED_SL":
-            logger.warning(f"Disjuntor de Catástrofe (-7.5%) acionado em {open_trade['symbol']} a ${current_price}!")
-            self._settle_closed_position(open_trade, "CLOSED_SL", current_price, ledger, "CATASTROPHE_SL")
+            logger.warning(f"Stop Loss Técnico (-{DEFAULT_STOP_PCT}%) acionado em {open_trade['symbol']} a ${current_price}!")
+            self._settle_closed_position(open_trade, "CLOSED_SL", current_price, ledger, "SL")
             return True
 
         if self._should_lock_tactical_profit(open_trade, entry_price, current_price, delib):
@@ -415,28 +417,28 @@ class TradingEngine:
         if entry_price <= 0:
             return current_tp
         tp_pct = ((current_tp - entry_price) / entry_price) * 100.0
-        if tp_pct <= 0.85:
+        if 0.80 <= tp_pct <= 3.50:
             return current_tp
 
-        new_tp = _round_price_dynamic(entry_price * 1.006)
+        new_tp = _round_price_dynamic(entry_price * (1.0 + (DEFAULT_TP_PCT / 100.0)))
         self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
         logger.info(
-            f"Alvo recalibrado para Day Trade Dinâmico / Scalping (+0.60% -> ${new_tp}) em {open_trade['symbol']}."
+            f"Alvo recalibrado para Day Trade Dinâmico (+{DEFAULT_TP_PCT}% -> ${new_tp}) em {open_trade['symbol']}."
         )
         return new_tp
 
-    def _ensure_catastrophe_stop_loss(self, open_trade: Dict[str, Any], entry_price: float) -> float:
+    def _ensure_intraday_stop_loss(self, open_trade: Dict[str, Any], entry_price: float) -> float:
         current_sl = float(open_trade["stop_loss"])
         if entry_price <= 0:
             return current_sl
         sl_pct = ((entry_price - current_sl) / entry_price) * 100.0
-        if 7.0 <= sl_pct <= 8.5:
+        if 1.0 <= sl_pct <= 2.2:
             return current_sl
 
-        new_sl = _round_price_dynamic(entry_price * (1.0 - (CATASTROPHE_STOP_PCT / 100.0)))
+        new_sl = _round_price_dynamic(entry_price * (1.0 - (DEFAULT_STOP_PCT / 100.0)))
         self.db.update_trade_stop_loss(int(open_trade["id"]), new_sl)
         logger.info(
-            f"Stop antigo ({sl_pct:.1f}%) recalibrado para Disjuntor de Catástrofe (-{CATASTROPHE_STOP_PCT}% -> ${new_sl}) "
+            f"Stop antigo ({sl_pct:.1f}%) recalibrado para Stop Loss Técnico (-{DEFAULT_STOP_PCT}% -> ${new_sl}) "
             f"em {open_trade['symbol']}."
         )
         return new_sl
@@ -466,11 +468,10 @@ class TradingEngine:
         delib: Optional[Deliberation]
     ) -> bool:
         """
-        Stop Temporal Soberano (Inspirado no AutoHedge): se a operação completou 90min
-        sem atingir a meta de lucro, o Agente de Risco encerra a posição para destravar 100%
-        do capital para a próxima oportunidade rápida.
-        A única exceção é se a posição já estiver no lucro (unrealized_pct >= +0.20%)
-        e com tendência muito forte (Score >= 75).
+        Stop Temporal Inteligente (Inspirado no AutoHedge):
+        - Entre 90m e 150m: só encerra se o ativo estiver no negativo E com perda de força técnica.
+        - Acima de 150m: encerra para destravar capital estagnado.
+        - Se estiver no positivo, NUNCA aciona Time Stop de perda.
         """
         if entry_price <= 0:
             return False
@@ -482,10 +483,11 @@ class TradingEngine:
         if unrealized_pct >= TACTICAL_PROFIT_MIN_PCT:
             return False
 
-        if delib is not None and delib.final_score >= 75.0 and unrealized_pct > 0.20:
-            return False
+        if age_minutes >= MAX_HOLD_MINUTES:
+            return True
 
-        return True
+        tech_weak = delib is not None and (delib.final_score < 55.0 or delib.indicators.rsi14 < 45.0)
+        return unrealized_pct < -0.40 and tech_weak
 
     @staticmethod
     def _compute_trade_age_minutes(created_at: Any) -> float:

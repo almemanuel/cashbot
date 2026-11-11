@@ -139,6 +139,9 @@ class ExchangeClient:
     def _is_valid_base_asset(base: str) -> bool:
         if not base or base in EXCLUDED_BASES:
             return False
+        # Filtra tokens de ações e ETFs tokenizados tradicionais (ex: SOXLB, SNDKB, NVDAB, SPCXB, TSLAB)
+        if len(base) > 3 and base.endswith("B"):
+            return False
         return not base.endswith(LEVERAGED_SUFFIXES)
 
     @staticmethod
