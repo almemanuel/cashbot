@@ -603,7 +603,6 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
     });
   }
 }
-}
 
 // Disparo de Ações
 async function triggerAction(endpoint, loadingText) {
