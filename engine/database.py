@@ -417,21 +417,31 @@ class Database:
                 "day_profit_usd": today_pnl,
             }
 
-    def get_dashboard_overview(self, trades_limit: int = 10, consensus_limit: int = 10) -> Dict[str, Any]:
+    def get_dashboard_overview(self, trades_limit: int = 50, consensus_limit: int = 20) -> Dict[str, Any]:
         """
         Carrega todos os dados do painel em uma única conexão ao banco,
         eliminando as conexões separadas por carregamento de tela.
         """
         with self._session() as cur:
             open_trades = self._fetch_open_trades_in_cursor(cur)
+            recent_trades = self._fetch_recent_trades_in_cursor(cur, trades_limit)
+            ledger = self._fetch_ledger_in_cursor(cur)
+
+            cur.execute("SELECT COALESCE(SUM(pnl_usd), 0.0), COUNT(*) FROM trades WHERE status LIKE 'CLOSED_%'")
+            row = cur.fetchone()
+            total_realized_pnl = float(row[0]) if row else 0.0
+            total_closed_trades = int(row[1]) if row else 0
+
             return {
                 "db_mode": "Neon PostgreSQL" if self.is_postgres else "SQLite Local",
-                "ledger": self._fetch_ledger_in_cursor(cur),
-                "ledger_history": self._fetch_ledger_history_in_cursor(cur, limit=30),
+                "ledger": ledger,
+                "ledger_history": self._fetch_ledger_history_in_cursor(cur, limit=50),
                 "open_trade": open_trades[0] if open_trades else None,
                 "open_trades": open_trades,
-                "recent_trades": self._fetch_recent_trades_in_cursor(cur, trades_limit),
+                "recent_trades": recent_trades,
                 "recent_consensus": self._fetch_recent_consensus_in_cursor(cur, consensus_limit),
+                "total_realized_pnl": round(total_realized_pnl, 2),
+                "total_closed_trades": total_closed_trades,
             }
 
     def _fetch_ledger_history_in_cursor(self, cur, limit: int = 30) -> List[Dict[str, Any]]:

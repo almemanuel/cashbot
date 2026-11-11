@@ -212,7 +212,7 @@ class CashBotHandler(SimpleHTTPRequestHandler):
 
     def _send_overview_payload(self, _payload: Dict[str, Any]) -> None:
         db = Database()
-        self._send_json(db.get_dashboard_overview(trades_limit=10, consensus_limit=10))
+        self._send_json(db.get_dashboard_overview(trades_limit=50, consensus_limit=20))
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)

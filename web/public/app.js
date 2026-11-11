@@ -423,64 +423,13 @@ function computeProfitAtTime(timeMs, allTrades) {
     }, 0);
 }
 
-// Renderiza os 2 Gráficos Limpos: (1) Investido & Saque e (2) Lucro Acumulado
+// Renderiza os 2 Gráficos: (1) Capital Total ao Longo do Tempo e (2) Resultado dos Trades (Lucros & Prejuízos)
 function renderPortfolioChart(history, trades, openTrades, currentTrading, currentWithdraw, currentInvested) {
   if (typeof Chart === 'undefined') return;
 
-  const realizedPnl = trades
-    .filter(t => t.status === 'CLOSED_TP' || t.status === 'CLOSED_SL')
-    .reduce((acc, t) => acc + Number(t.pnl_usd || 0), 0);
-
-  const pnlBadge = document.getElementById('pnlSummaryBadge');
-  if (pnlBadge) {
-    const sign = realizedPnl >= 0 ? '+' : '';
-    pnlBadge.innerText = `Lucro Realizado: ${sign}$${realizedPnl.toFixed(2)}`;
-    pnlBadge.className = realizedPnl >= 0
-      ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-      : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20';
-  }
-
-  const basePoints = history.length > 0
-    ? history.map(p => {
-        const tMs = parseDbTimeMs(p.updated_at);
-        return {
-          withdrawable_pool: Number(p.withdrawable_pool || 0),
-          invested_usd: computeInvestedAtTime(tMs, trades),
-          profit_usd: computeProfitAtTime(tMs, trades),
-          updated_at: p.updated_at,
-        };
-      })
-    : [{
-        withdrawable_pool: currentWithdraw,
-        invested_usd: currentInvested,
-        profit_usd: realizedPnl,
-        updated_at: new Date().toISOString(),
-      }];
-
-  const lastPoint = basePoints[basePoints.length - 1];
-  const hasNewOpenInvestment = Math.abs((lastPoint?.invested_usd || 0) - currentInvested) > 0.01;
-  const latestOpenTime = openTrades && openTrades.length > 0 ? openTrades[0].created_at : new Date().toISOString();
-
-  const points = hasNewOpenInvestment
-    ? [...basePoints, {
-        withdrawable_pool: currentWithdraw,
-        invested_usd: currentInvested,
-        profit_usd: realizedPnl,
-        updated_at: latestOpenTime,
-      }]
-    : basePoints;
-
-  const labels = points.map((p, idx) => {
-    const formatted = formatTimestampBr(p.updated_at);
-    return formatted ? formatted.replace(/\/\d{4} às /, ' ') : `Pt ${idx + 1}`;
-  });
-  const investedSeries = points.map(p => Number(p.invested_usd || 0));
-  const withdrawSeries = points.map(p => Number(p.withdrawable_pool || 0));
-  const profitSeries = points.map(p => Number(p.profit_usd || 0));
-
   const commonScales = {
     x: {
-      ticks: { color: '#64748b', font: { size: 9 } },
+      ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 45 },
       grid: { color: 'rgba(255,255,255,0.04)' }
     },
     y: {
@@ -489,32 +438,60 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
     }
   };
 
-  // Gráfico 1: Valor Investido & Valor p/ Saque
+  // 1. Gráfico de Patrimônio Total & Flutuação da Banca
+  const baseCapital = 1000.0;
+  const ledgerPoints = (history && history.length > 0)
+    ? history
+    : [{ trading_balance: currentTrading, withdrawable_pool: currentWithdraw, updated_at: new Date().toISOString() }];
+
+  const capitalLabels = ledgerPoints.map((p, idx) => {
+    const formatted = formatTimestampBr(p.updated_at);
+    return formatted ? formatted.replace(/\/\d{4} às /, ' ') : `Pt ${idx + 1}`;
+  });
+
+  const totalCapitalSeries = ledgerPoints.map(p => {
+    return Number(p.trading_balance || 0) + Number(p.withdrawable_pool || 0);
+  });
+  const baseCapitalSeries = ledgerPoints.map(() => baseCapital);
+
+  const currentCapital = totalCapitalSeries[totalCapitalSeries.length - 1] || baseCapital;
+  const capitalDiff = Math.round((currentCapital - baseCapital) * 100) / 100;
+  const capitalBadge = document.getElementById('capitalSummaryBadge');
+  if (capitalBadge) {
+    const sign = capitalDiff >= 0 ? '+' : '';
+    capitalBadge.innerText = `Patrimônio: $${currentCapital.toFixed(2)} (${sign}$${capitalDiff.toFixed(2)})`;
+    capitalBadge.className = capitalDiff >= 0
+      ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+      : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20';
+  }
+
   const canvas1 = document.getElementById('portfolioChart');
   if (canvas1) {
     if (portfolioChartInstance) portfolioChartInstance.destroy();
     portfolioChartInstance = new Chart(canvas1, {
       type: 'line',
       data: {
-        labels,
+        labels: capitalLabels,
         datasets: [
           {
-            label: 'Valor Investido ($)',
-            data: investedSeries,
-            borderColor: '#06b6d4',
-            backgroundColor: 'rgba(6, 182, 212, 0.14)',
+            label: 'Patrimônio Total ($)',
+            data: totalCapitalSeries,
+            borderColor: capitalDiff >= 0 ? '#10b981' : '#06b6d4',
+            backgroundColor: capitalDiff >= 0 ? 'rgba(16, 185, 129, 0.12)' : 'rgba(6, 182, 212, 0.12)',
             borderWidth: 2.5,
             tension: 0.35,
             fill: true,
+            pointRadius: 3,
+            pointHoverRadius: 5,
           },
           {
-            label: 'Valor p/ Saque ($)',
-            data: withdrawSeries,
-            borderColor: '#f59e0b',
-            backgroundColor: 'rgba(245, 158, 11, 0.10)',
-            borderWidth: 2,
-            tension: 0.35,
-            fill: true,
+            label: 'Capital Base ($1,000)',
+            data: baseCapitalSeries,
+            borderColor: '#94a3b8',
+            borderDash: [5, 5],
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false,
           }
         ]
       },
@@ -522,31 +499,87 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 } }
+          legend: { labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 } },
+          tooltip: {
+            callbacks: {
+              afterLabel: function(context) {
+                if (context.datasetIndex === 0) {
+                  const val = Number(context.raw);
+                  const diff = val - baseCapital;
+                  const sign = diff >= 0 ? '+' : '';
+                  return `Flutuação por Trades: ${sign}$${diff.toFixed(2)} (${(diff / baseCapital * 100).toFixed(2)}%)`;
+                }
+                return '';
+              }
+            }
+          }
         },
         scales: commonScales
       }
     });
   }
 
-  // Gráfico 2: Lucro Realizado Acumulado
+  // 2. Gráfico de Resultado dos Trades (Lucros & Prejuízos)
+  const closedTrades = (trades || [])
+    .filter(t => t.status === 'CLOSED_TP' || t.status === 'CLOSED_SL')
+    .sort((a, b) => parseDbTimeMs(a.closed_at || a.created_at) - parseDbTimeMs(b.closed_at || b.created_at));
+
+  let cumPnl = 0;
+  const tradeLabels = [];
+  const cumPnlSeries = [];
+  const singlePnlSeries = [];
+  const barColors = [];
+
+  closedTrades.forEach(t => {
+    const pnl = Number(t.pnl_usd || 0);
+    cumPnl = Math.round((cumPnl + pnl) * 100) / 100;
+    const coin = (t.symbol || '').split('/')[0];
+    const timeStr = formatTimestampBr(t.closed_at || t.created_at).replace(/\/\d{4} às /, ' ');
+    tradeLabels.push(`#${t.id} ${coin} (${timeStr})`);
+    cumPnlSeries.push(cumPnl);
+    singlePnlSeries.push(pnl);
+    barColors.push(pnl >= 0 ? 'rgba(16, 185, 129, 0.75)' : 'rgba(244, 63, 94, 0.75)');
+  });
+
+  const totalRealized = closedTrades.length > 0 ? cumPnl : (overviewData?.total_realized_pnl ?? 0);
+  const isPositivePnl = totalRealized >= 0;
+  const pnlBadge = document.getElementById('pnlSummaryBadge');
+  if (pnlBadge) {
+    const sign = totalRealized >= 0 ? '+' : '';
+    pnlBadge.innerText = `Resultado Total: ${sign}$${Number(totalRealized).toFixed(2)}`;
+    pnlBadge.className = isPositivePnl
+      ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+      : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20';
+  }
+
   const canvas2 = document.getElementById('profitChart');
   if (canvas2) {
     if (profitChartInstance) profitChartInstance.destroy();
-    const isPositive = realizedPnl >= 0;
     profitChartInstance = new Chart(canvas2, {
-      type: 'line',
       data: {
-        labels,
+        labels: tradeLabels.length > 0 ? tradeLabels : ['Sem trades'],
         datasets: [
           {
-            label: 'Lucro Acumulado ($)',
-            data: profitSeries,
-            borderColor: isPositive ? '#10b981' : '#f43f5e',
-            backgroundColor: isPositive ? 'rgba(16, 185, 129, 0.14)' : 'rgba(244, 63, 94, 0.14)',
+            type: 'line',
+            label: 'Resultado Acumulado ($)',
+            data: cumPnlSeries.length > 0 ? cumPnlSeries : [0],
+            borderColor: isPositivePnl ? '#10b981' : '#f43f5e',
+            backgroundColor: isPositivePnl ? 'rgba(16, 185, 129, 0.10)' : 'rgba(244, 63, 94, 0.10)',
             borderWidth: 2.5,
-            tension: 0.35,
+            tension: 0.3,
             fill: true,
+            pointRadius: 3.5,
+            pointHoverRadius: 6,
+            yAxisID: 'y',
+          },
+          {
+            type: 'bar',
+            label: 'PnL do Trade ($)',
+            data: singlePnlSeries.length > 0 ? singlePnlSeries : [0],
+            backgroundColor: barColors.length > 0 ? barColors : ['rgba(16, 185, 129, 0.5)'],
+            borderRadius: 4,
+            barThickness: 8,
+            yAxisID: 'y',
           }
         ]
       },
@@ -554,12 +587,22 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 } }
+          legend: { labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 } },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const val = Number(context.raw);
+                const sign = val >= 0 ? '+' : '';
+                return `${context.dataset.label}: ${sign}$${val.toFixed(2)}`;
+              }
+            }
+          }
         },
         scales: commonScales
       }
     });
   }
+}
 }
 
 // Disparo de Ações
