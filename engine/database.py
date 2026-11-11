@@ -391,6 +391,9 @@ class Database:
 
             closed_trades = [t for t in recent_trades if str(t.get("status", "")).startswith("CLOSED_")]
             today_pnl = round(sum(float(t.get("pnl_usd", 0.0)) for t in closed_trades), 2)
+            wins = sum(1 for t in closed_trades if float(t.get("pnl_usd", 0.0)) > 0)
+            losses = sum(1 for t in closed_trades if float(t.get("pnl_usd", 0.0)) < 0)
+            breakevens = len(closed_trades) - wins - losses
             start_total = round(current_total - today_pnl, 2)
 
             return {
@@ -407,6 +410,9 @@ class Database:
                 "open_trades_count": len(open_trades),
                 "closed_count": len(closed_trades),
                 "closed_today_count": len(closed_trades),
+                "wins_count": wins,
+                "losses_count": losses,
+                "breakevens_count": breakevens,
                 "today_pnl": today_pnl,
                 "day_profit_usd": today_pnl,
             }

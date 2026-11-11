@@ -299,28 +299,41 @@ class TelegramNotifier:
         start_hour: int = 22,
         end_hour: int = 23
     ) -> bool:
-        """Envia o consolidado diário no início da janela de pausa/saque (22h BRT)."""
+        """Envia o consolidado diário no início da noite (22h BRT)."""
         start_total = float(stats.get("start_of_day_total", 0.0))
         end_total = float(stats.get("end_of_day_total", 0.0))
         day_profit = float(stats.get("day_profit_usd", 0.0))
-        closed_count = int(stats.get("closed_today_count", 0))
+        wins = int(stats.get("wins_count", 0))
+        losses = int(stats.get("losses_count", 0))
+        closed_count = int(stats.get("closed_today_count", wins + losses))
         open_count = int(stats.get("open_trades_count", 0))
         invested_usd = float(stats.get("invested_usd", 0.0))
         free_cash = float(stats.get("free_cash_usd", 0.0))
         pool = float(stats.get("withdrawable_pool", 0.0))
         withdraw_guide = self._format_withdraw_eligibility(pool, end_hour)
 
+        if day_profit >= 0:
+            pnl_line = (
+                f"• 💰 <b>Lucro Líquido Conquistado Hoje:</b> +US$ {day_profit:,.2f} "
+                f"<i>({wins} vitórias / {losses} derrotas em {closed_count} operações)</i>"
+            )
+        else:
+            pnl_line = (
+                f"• 📉 <b>Resultado Líquido de Hoje:</b> -US$ {abs(day_profit):,.2f} "
+                f"<i>({wins} vitórias / {losses} derrotas em {closed_count} operações)</i>"
+            )
+
         msg = (
             f"🌙 <b>CashBot — Fechamento do Dia ({start_hour}h BRT)</b>\n\n"
             f"📊 <b>Balanço de Hoje:</b>\n"
             f"• 🌅 <b>Patrimônio no Início do Dia:</b> US$ {start_total:,.2f}\n"
             f"• 🏁 <b>Patrimônio Agora no Fim do Dia:</b> US$ {end_total:,.2f}\n"
-            f"• 💰 <b>Lucro Conquistado Hoje:</b> +US$ {day_profit:,.2f} <i>({closed_count} vendas com lucro hoje)</i>\n\n"
+            f"{pnl_line}\n\n"
             f"⚙️ <b>Resumo das Operações:</b>\n"
             f"• 📈 <b>Moedas em andamento ({open_count}):</b> US$ {invested_usd:,.2f} investidos aguardando meta de lucro\n"
             f"• 💵 <b>Caixa Livre em Conta:</b> US$ {free_cash:,.2f}\n\n"
             f"{withdraw_guide}\n\n"
-            f"⏸️ <b>Pausa Noturna ({start_hour}h às {end_hour}h):</b> Pausa estratégica de 1h antes do reinício do próximo ciclo diário."
+            f"🔄 <b>Operações 24/7:</b> O robô segue monitorando o mercado continuamente durante a noite para novas oportunidades."
         )
         return self.send_message(msg)
 

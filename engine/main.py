@@ -195,10 +195,10 @@ class TradingEngine:
 
     def _handle_withdraw_pause_window(self, force_opportunity: bool) -> bool:
         """
-        Durante a janela de 1h de saque (ex: 22h às 23h BRT), congela compras e vendas
-        e envia o consolidado diário uma única vez.
+        No início da noite (22h BRT), envia o consolidado diário uma única vez
+        e segue operando 24/7 sem congelar o mercado.
         """
-        if force_opportunity or not self._is_in_withdraw_pause_window_brt():
+        if not self._is_in_withdraw_pause_window_brt():
             return False
 
         open_trades = self.db.get_open_trades()
@@ -211,36 +211,17 @@ class TradingEngine:
             self.notifier.notify_end_of_day_summary(stats, start_hour=start_h, end_hour=end_h)
             self.db.save_system_marker("SYSTEM/EOD", f"Consolidado diário enviado às {start_h}h BRT")
 
-        logger.info(
-            f"Janela diária de saque ativa ({start_h}h às {end_h}h BRT): "
-            f"Operações pausadas por 1h aguardando decisão de saque do usuário."
-        )
-        return True
+        return False
 
     def _handle_daily_restart_if_due(self) -> None:
-        """
-        Ao encerrar a janela de saque (23h BRT), sincroniza a carteira na Binance,
-        reincorpora eventual lucro não sacado ao giro e avisa o capital inicial do novo ciclo.
-        """
+        """Sincroniza o fluxo de caixa na virada do ciclo mantendo operações contínuas 24/7."""
         if not self._is_restart_hour_brt() or self.db.has_system_marker_since("SYSTEM/RESTART", minutes=90):
             return
 
         open_trades = self.db.get_open_trades()
         raw_ledger = self.db.get_ledger()
-        pool_before = float(raw_ledger.get("withdrawable_pool", 0.0))
-        updated_ledger = self._reconcile_exchange_cash_flow(raw_ledger, open_trades)
-        invested_usd = round(sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades), 2)
-        free_cash = self._compute_free_capital(updated_ledger, open_trades)
-        total_capital = round(float(updated_ledger["trading_balance"]) + float(updated_ledger["withdrawable_pool"]), 2)
-
-        self.notifier.notify_daily_restart(
-            total_capital=float(updated_ledger["trading_balance"]),
-            free_cash=free_cash,
-            invested_usd=invested_usd,
-            open_count=len(open_trades),
-            withdrawable_pool=float(updated_ledger["withdrawable_pool"]),
-        )
-        self.db.save_system_marker("SYSTEM/RESTART", f"Reinício diário notificado com capital ${total_capital:,.2f}")
+        self._reconcile_exchange_cash_flow(raw_ledger, open_trades)
+        self.db.save_system_marker("SYSTEM/RESTART", "Sincronização diária concluída.")
 
     def _check_all_open_trades(
         self,
