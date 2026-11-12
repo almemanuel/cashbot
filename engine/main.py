@@ -36,7 +36,6 @@ MAX_DYNAMIC_PAIRS = 6
 MAX_OPEN_SLOTS = 1
 MIN_SCORE_FOR_TRADE = 60.0
 TACTICAL_PROFIT_MIN_PCT = 0.40
-TACTICAL_HOLD_MINUTES = 20.0
 ROTATION_MIN_CANDIDATE_SCORE = 72.0
 ROTATION_MAX_OPEN_SCORE = 50.0
 ROTATION_MIN_HOLD_MINUTES = 30.0
@@ -46,8 +45,13 @@ DEFAULT_STOP_PCT = 1.50
 DEFAULT_TP_PCT = 1.50
 TIME_STOP_MINUTES = 90.0
 MAX_HOLD_MINUTES = 150.0
+HARD_MAX_HOLD_MINUTES = 240.0
 TIME_STOP_MAX_LOSS_PCT = 1.8
-ROUND_TRIP_FEE_RATE = 0.002
+# Taxa ida+volta. Padrão 0.15% = 0.075% por lado pagando taxas com BNB (desconto de 25%).
+ROUND_TRIP_FEE_RATE = float(os.getenv("ROUND_TRIP_FEE_RATE", "0.0015"))
+BREAKEVEN_TRIGGER = 1.0030
+BREAKEVEN_LOCK = 1.0020
+CHECK_LOOKBACK_MINUTES = 16
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
 
@@ -322,15 +326,16 @@ class TradingEngine:
         delib: Optional[Deliberation] = None
     ) -> bool:
         """
-        Avalia 4 gatilhos inteligentes de saída:
-        1. Take Profit curto (+0.8% a +2.2%) com análise de continuidade de alta (Trailing TP).
-        2. Realização Tática no Lucro (>= +0.35% após 45min ou enfraquecimento).
-        3. Disjuntor de Catástrofe (-7.5%) para evitar colapsos profundos sem cair em ruído curto.
-        4. Stop Temporal Inteligente (3h estagnado em faixa estreita para destravar capital).
+        Avalia os gatilhos de saída:
+        1. Take Profit / Stop Loss como ordens paradas (mínima/máxima de 1m desde a última checagem).
+        2. Break-even: andou +0.30% a favor, o stop sobe para entrada +0.20% (cobre as taxas).
+        3. Alvo estendido se a alta continuar forte quando o preço ainda está acima do alvo.
+        4. Stop Temporal (90-150 min sem evolução, teto absoluto de 240 min).
         """
         entry_price = float(open_trade["entry_price"])
         take_profit = self._ensure_daytrade_take_profit(open_trade, entry_price)
         stop_loss = self._ensure_intraday_stop_loss(open_trade, entry_price)
+        age_minutes = self._compute_trade_age_minutes(open_trade.get("created_at"))
 
         logger.info(
             f"Trade ativo #{open_trade['id']} ({open_trade['symbol']}): "
@@ -341,54 +346,58 @@ class TradingEngine:
             order_list_id=open_trade["binance_order_list_id"],
             entry_price=entry_price,
             stop_loss=stop_loss,
-            take_profit=take_profit
+            take_profit=take_profit,
+            lookback_minutes=max(1, min(CHECK_LOOKBACK_MINUTES, int(age_minutes))),
         )
         status = check["status"]
         current_price = float(check.get("current_price") or entry_price)
 
-        # Trailing Breakeven com Proteção de Taxa: se andou >= +0.30% a favor, puxa o stop para a entrada + taxa
-        if current_price >= entry_price * 1.0030 and stop_loss < entry_price:
-            stop_loss = _round_price_dynamic(entry_price * 1.001)
-            self.db.update_trade_stop_loss(int(open_trade["id"]), stop_loss)
-            logger.info(f"🛡️ Trailing Breakeven ativado em {open_trade['symbol']}: Stop movido para ${stop_loss} (Risco Zero com taxa protegida)!")
-
         if status == "CLOSED_TP":
-            if self._should_ride_strong_uptrend(open_trade, current_price, delib):
+            if self._should_ride_strong_uptrend(open_trade, current_price, take_profit, delib):
                 return False
             self._settle_closed_position(open_trade, "CLOSED_TP", float(check["exit_price"]), ledger, "TP")
             return True
 
         if status == "CLOSED_SL":
-            logger.warning(f"Stop Loss Técnico (-{DEFAULT_STOP_PCT}%) acionado em {open_trade['symbol']} a ${current_price}!")
-            self._settle_closed_position(open_trade, "CLOSED_SL", current_price, ledger, "SL")
+            exit_price = float(check["exit_price"])
+            logger.warning(f"Stop Loss acionado em {open_trade['symbol']} a ${exit_price}!")
+            self._settle_closed_position(open_trade, "CLOSED_SL", exit_price, ledger, "SL")
             return True
 
-        if self._should_lock_tactical_profit(open_trade, entry_price, current_price, delib):
-            if self._should_ride_strong_uptrend(open_trade, current_price, delib):
-                return False
-            logger.info(f"Realização Tática de Day Trade acionada para {open_trade['symbol']} a ${current_price}!")
-            self._settle_closed_position(open_trade, "CLOSED_TP", current_price, ledger, "TP")
-            return True
+        # Break-even com proteção de taxa: andou >= +0.30% a favor, puxa o stop para entrada +0.20%
+        if current_price >= entry_price * BREAKEVEN_TRIGGER and stop_loss < entry_price:
+            stop_loss = _round_price_dynamic(entry_price * BREAKEVEN_LOCK)
+            self.db.update_trade_stop_loss(int(open_trade["id"]), stop_loss)
+            self._sync_protection_orders(open_trade, stop_loss, take_profit)
+            logger.info(f"🛡️ Break-even ativado em {open_trade['symbol']}: Stop movido para ${stop_loss} (taxas cobertas)!")
 
         if self._should_trigger_time_stop(open_trade, entry_price, current_price, delib):
             close_status = "CLOSED_TP" if current_price >= entry_price else "CLOSED_SL"
-            logger.info(f"Stop Temporal (3h sem evolução) acionado para {open_trade['symbol']} a ${current_price}!")
+            logger.info(f"Stop Temporal acionado para {open_trade['symbol']} a ${current_price} ({age_minutes:.0f} min)!")
             self._settle_closed_position(open_trade, close_status, current_price, ledger, "TIME_STOP")
             return True
 
         return False
 
+    def _sync_protection_orders(self, open_trade: Dict[str, Any], stop_loss: float, take_profit: float) -> None:
+        self.exchange.replace_protection_orders(
+            str(open_trade["symbol"]), float(open_trade["quantity"]), stop_loss, take_profit
+        )
+
     def _should_ride_strong_uptrend(
         self,
         open_trade: Dict[str, Any],
         current_price: float,
+        take_profit: float,
         delib: Optional[Deliberation]
     ) -> bool:
         """
-        Se o ativo bateu no ponto de venda mas a tendência de alta continua forte (IA >= 68,
-        Preço > EMA20 > EMA50, acima da VWAP e RSI < 68 sem exaustão), sobe o alvo (+0.8%)
-        e aguarda mais rodadas para maximizar o lucro!
+        Se o preço ainda está acima do alvo e a tendência de alta continua forte (IA >= 68,
+        Preço > EMA20 > EMA50, acima da VWAP e RSI < 68), sobe o alvo (+0.8%) e trava lucro.
+        Em modo real a OCO já executou ao tocar o alvo, então não há o que segurar.
         """
+        if not self.exchange.simulation_mode or current_price < take_profit:
+            return False
         if delib is None or delib.veto or delib.final_score < 68.0:
             return False
         ind = delib.indicators
@@ -396,19 +405,13 @@ class TradingEngine:
             return False
 
         new_tp = _round_price_dynamic(current_price * 1.008)
+        guaranteed_sl = max(float(open_trade["stop_loss"]), _round_price_dynamic(current_price * 0.997))
         self.db.update_trade_take_profit(int(open_trade["id"]), new_tp)
-        self.exchange.update_take_profit_order(str(open_trade["symbol"]), float(open_trade["quantity"]), new_tp)
-        guaranteed_sl = _round_price_dynamic(current_price * 0.997)
-        if guaranteed_sl > float(open_trade["stop_loss"]):
-            self.db.update_trade_stop_loss(int(open_trade["id"]), guaranteed_sl)
-            logger.info(
-                f"Tendência de alta forte em {open_trade['symbol']} (Score {delib.final_score:.1f}, RSI {ind.rsi14:.1f})! "
-                f"Segurando venda e subindo Take Profit para ${new_tp} (+0.8%) com Lucro Garantido em ${guaranteed_sl}."
-            )
-            return True
+        self.db.update_trade_stop_loss(int(open_trade["id"]), guaranteed_sl)
+        self._sync_protection_orders(open_trade, guaranteed_sl, new_tp)
         logger.info(
             f"Tendência de alta forte em {open_trade['symbol']} (Score {delib.final_score:.1f}, RSI {ind.rsi14:.1f})! "
-            f"Segurando venda e subindo Take Profit para ${new_tp} (+0.8%)."
+            f"Segurando venda e subindo Take Profit para ${new_tp} (+0.8%) com Lucro Garantido em ${guaranteed_sl}."
         )
         return True
 
@@ -417,7 +420,7 @@ class TradingEngine:
         if entry_price <= 0:
             return current_tp
         tp_pct = ((current_tp - entry_price) / entry_price) * 100.0
-        if 0.80 <= tp_pct <= 3.50:
+        if tp_pct >= 0.80:
             return current_tp
 
         new_tp = _round_price_dynamic(entry_price * (1.0 + (DEFAULT_TP_PCT / 100.0)))
@@ -432,7 +435,8 @@ class TradingEngine:
         if entry_price <= 0:
             return current_sl
         sl_pct = ((entry_price - current_sl) / entry_price) * 100.0
-        if 1.0 <= sl_pct <= 2.2:
+        # Preserva stops já acima da entrada (break-even / lucro travado) e stops técnicos até 2.2%
+        if current_sl > 0 and sl_pct <= 2.2:
             return current_sl
 
         new_sl = _round_price_dynamic(entry_price * (1.0 - (DEFAULT_STOP_PCT / 100.0)))
@@ -443,23 +447,6 @@ class TradingEngine:
         )
         return new_sl
 
-    def _should_lock_tactical_profit(
-        self,
-        open_trade: Dict[str, Any],
-        entry_price: float,
-        current_price: float,
-        delib: Optional[Deliberation]
-    ) -> bool:
-        if entry_price <= 0 or current_price <= entry_price:
-            return False
-        unrealized_pct = ((current_price - entry_price) / entry_price) * 100.0
-        if unrealized_pct < TACTICAL_PROFIT_MIN_PCT:
-            return False
-
-        age_minutes = self._compute_trade_age_minutes(open_trade.get("created_at"))
-        ai_weakening = delib is not None and (delib.final_score < 58.0 or delib.indicators.rsi14 > 68.0)
-        return age_minutes >= TACTICAL_HOLD_MINUTES or ai_weakening
-
     def _should_trigger_time_stop(
         self,
         open_trade: Dict[str, Any],
@@ -468,21 +455,22 @@ class TradingEngine:
         delib: Optional[Deliberation]
     ) -> bool:
         """
-        Stop Temporal Inteligente (Inspirado no AutoHedge):
-        - Entre 90m e 150m: só encerra se o ativo estiver no negativo E com perda de força técnica.
-        - Acima de 150m: encerra para destravar capital estagnado.
-        - Se estiver no positivo, NUNCA aciona Time Stop de perda.
+        Stop Temporal Inteligente:
+        - Entre 90m e 150m: encerra se o ativo estiver no negativo E com perda de força técnica.
+        - Aos 150m: encerra se ainda não engatou alta (< +0.40%).
+        - Aos 240m: teto absoluto para reciclar o capital.
         """
         if entry_price <= 0:
             return False
         age_minutes = self._compute_trade_age_minutes(open_trade.get("created_at"))
         if age_minutes < TIME_STOP_MINUTES:
             return False
+        if age_minutes >= HARD_MAX_HOLD_MINUTES:
+            return True
 
         unrealized_pct = ((current_price - entry_price) / entry_price) * 100.0
         if unrealized_pct >= TACTICAL_PROFIT_MIN_PCT:
             return False
-
         if age_minutes >= MAX_HOLD_MINUTES:
             return True
 

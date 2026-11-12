@@ -183,8 +183,8 @@ Técnicas de Day Trade Quantitativo a aplicar:
    - Pullback na VWAP ou EMA 20 com retomada compradora (RSI entre 38 e 64), OU
    - Reversão na Banda de Bollinger Inferior com defesa compradora, OU
    - Breakout com Volume Institucional (`volume_ratio >= 1.2x`) e espaço livre até a Banda Superior.
-2. ALVO CURTO CIRÚRGICO (`take_profit_pct` entre `0.45` e `1.0`):
-   - Escolha um alvo curto e rápido (ex: `0.5%` a `0.8%`) posicionado antes da resistência imediata / Banda de Bollinger Superior para realizar lucro rápido no próximo ciclo de 15 minutos!
+2. ALVO DE DAY TRADE (`take_profit_pct` entre `1.2` e `2.5`):
+   - Escolha um alvo com relação retorno/risco positiva (ex: `1.4%` a `2.2%`) posicionado antes da resistência de 24h / Banda de Bollinger Superior.
 3. VETOS INSTITUCIONAIS OBRIGATÓRIOS (`veto: true` ou nota < 50):
    - VETO DE COMPRA DE TOPO: Jamais compre ativo já esticado acima da Banda de Bollinger Superior com RSI > 72 (exaustão de topo).
    - VETO DE FACA CAINDO (Regra Bear Critic): Se o Preço estiver abaixo da EMA 50 e EMA 200 com Momentum 1h negativo (< -1.0%), VETO IMEDIATO. Não tente adivinhar fundo em ativo que está sangrando.

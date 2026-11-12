@@ -287,20 +287,38 @@ class ExchangeClient:
     ) -> Dict[str, Any]:
         market_order = self.exchange.create_market_buy_order(symbol, quantity)
         logger.info(f"Compra a mercado executada na Testnet: {market_order.get('id')}")
-
-        tp_order = self.exchange.create_order(
-            symbol=symbol,
-            type="limit",
-            side="sell",
-            amount=quantity,
-            price=take_profit,
-        )
-        order_list_id = tp_order.get("orderListId") or tp_order.get("id")
+        order_list_id = self._place_protection_orders(symbol, quantity, stop_loss, take_profit)
         return {
             "order_list_id": order_list_id,
             "status": "OPEN_OCO",
             "simulated": False,
         }
+
+    def _place_protection_orders(self, symbol: str, quantity: float, stop_loss: float, take_profit: float) -> Any:
+        """
+        Coloca uma OCO real na Binance (venda limit no alvo + stop-limit no stop), para o stop
+        ficar parado na corretora e não depender do ciclo de 15 min. Fallback: limit só no alvo.
+        """
+        try:
+            return self._submit_oco(symbol, quantity, stop_loss, take_profit)
+        except Exception as e:
+            logger.warning(f"OCO indisponível para {symbol} ({e}). Colocando só a ordem limit do alvo.")
+        tp_order = self.exchange.create_order(symbol=symbol, type="limit", side="sell", amount=quantity, price=take_profit)
+        return tp_order.get("id")
+
+    def _submit_oco(self, symbol: str, quantity: float, stop_loss: float, take_profit: float) -> Any:
+        stop_limit = stop_loss * 0.998
+        response = self.exchange.privatePostOrderOco({
+            "symbol": symbol.replace("/", "").upper(),
+            "side": "SELL",
+            "quantity": self.exchange.amount_to_precision(symbol, quantity),
+            "price": self.exchange.price_to_precision(symbol, take_profit),
+            "stopPrice": self.exchange.price_to_precision(symbol, stop_loss),
+            "stopLimitPrice": self.exchange.price_to_precision(symbol, stop_limit),
+            "stopLimitTimeInForce": "GTC",
+        })
+        logger.info(f"OCO real colocada na Binance para {symbol}: alvo ${take_profit} | stop ${stop_loss}")
+        return response.get("orderListId")
 
     def check_oco_status(
         self,
@@ -308,54 +326,59 @@ class ExchangeClient:
         order_list_id: int,
         entry_price: float,
         stop_loss: float,
-        take_profit: float
+        take_profit: float,
+        lookback_minutes: int = 16
     ) -> Dict[str, Any]:
         """
-        Verifica se a posição atingiu o Take Profit.
-        Em Modo Perda Zero (Spot sem alavancagem), não vende em quedas (Hold até recuperar).
+        Verifica Stop/Take Profit como ordens paradas na corretora: usa a mínima e a máxima
+        dos candles de 1m desde a última checagem (não só o preço no instante do ciclo).
+        Assim o stop sai no preço do stop e TPs tocados entre ciclos são capturados.
         """
         current_price = self.fetch_current_price(symbol, fallback_price=entry_price)
+        price_range = self.fetch_recent_range(symbol, lookback_minutes, current_price)
+        return self._evaluate_price_triggers(current_price, stop_loss, take_profit, price_range)
 
-        if self.simulation_mode or not self.exchange:
-            return self._evaluate_price_triggers(current_price, stop_loss, take_profit)
+    def fetch_recent_range(self, symbol: str, minutes: int, fallback_price: float) -> Dict[str, float]:
+        """Retorna máxima, mínima e abertura dos últimos N candles de 1m (fallback: preço atual)."""
+        fallback = {"high": fallback_price, "low": fallback_price, "open": fallback_price}
+        clean_symbol = symbol.replace("/", "").upper()
+        limit = max(1, min(60, int(minutes)))
+        for base_url in BINANCE_PUBLIC_ENDPOINTS:
+            candles = self._try_fetch_klines_interval(base_url, clean_symbol, "1m", limit)
+            if candles:
+                return self._summarize_range(candles, fallback_price)
+        return fallback
 
-        return self._check_live_oco_orders(symbol, order_list_id, current_price, stop_loss, take_profit)
-
-    @staticmethod
-    def _evaluate_price_triggers(current_price: float, stop_loss: float, take_profit: float) -> Dict[str, Any]:
-        if current_price >= take_profit:
-            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit), "current_price": current_price}
-        if stop_loss > 0 and current_price <= stop_loss:
-            return {"status": "CLOSED_SL", "exit_price": current_price, "current_price": current_price}
-        return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
-
-    def _check_live_oco_orders(
-        self,
-        symbol: str,
-        order_list_id: int,
-        current_price: float,
-        stop_loss: float,
-        take_profit: float
-    ) -> Dict[str, Any]:
+    def _try_fetch_klines_interval(self, base_url: str, clean_symbol: str, interval: str, limit: int) -> List[Dict[str, float]]:
+        url = f"{base_url}/klines?symbol={clean_symbol}&interval={interval}&limit={limit}"
         try:
-            orders = self.exchange.fetch_open_orders(symbol)
-            return self._resolve_open_orders_state(orders, order_list_id, current_price, stop_loss, take_profit)
+            return self._parse_klines_response(requests.get(url, timeout=10))
         except Exception as e:
-            logger.error(f"Erro ao checar status OCO na Binance: {e}")
-            return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
+            logger.warning(f"Falha ao consultar klines {interval} em {base_url} para {clean_symbol}: {e}")
+            return []
 
     @staticmethod
-    def _resolve_open_orders_state(
-        orders: List[Dict[str, Any]],
-        order_list_id: int,
+    def _summarize_range(candles: List[Dict[str, float]], current_price: float) -> Dict[str, float]:
+        return {
+            "high": max([c["high"] for c in candles] + [current_price]),
+            "low": min([c["low"] for c in candles] + [current_price]),
+            "open": candles[0]["open"],
+        }
+
+    @staticmethod
+    def _evaluate_price_triggers(
         current_price: float,
         stop_loss: float,
-        take_profit: float
+        take_profit: float,
+        price_range: Dict[str, float]
     ) -> Dict[str, Any]:
-        if current_price >= take_profit:
-            return {"status": "CLOSED_TP", "exit_price": max(current_price, take_profit), "current_price": current_price}
-        if stop_loss > 0 and current_price <= stop_loss:
-            return {"status": "CLOSED_SL", "exit_price": current_price, "current_price": current_price}
+        # Se stop e alvo foram tocados na mesma janela, assume o stop (postura conservadora).
+        if stop_loss > 0 and price_range["low"] <= stop_loss:
+            exit_price = min(stop_loss, price_range["open"])
+            return {"status": "CLOSED_SL", "exit_price": exit_price, "current_price": current_price}
+        if price_range["high"] >= take_profit:
+            exit_price = max(take_profit, price_range["open"])
+            return {"status": "CLOSED_TP", "exit_price": exit_price, "current_price": current_price}
         return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
 
     def execute_exit_order(self, symbol: str, quantity: float) -> None:
@@ -372,27 +395,27 @@ class ExchangeClient:
         except Exception as e:
             logger.warning(f"Aviso ao executar saída a mercado na Binance ({symbol}): {e}")
 
-    def update_take_profit_order(self, symbol: str, quantity: float, new_take_profit: float) -> None:
+    def replace_protection_orders(self, symbol: str, quantity: float, stop_loss: float, take_profit: float) -> None:
         """
-        Em modo real, substitui a ordem limit de venda pelo novo preço de Take Profit
-        quando o robô decide surfar uma tendência de alta mais longa (Trailing TP).
+        Em modo real, cancela a OCO atual e coloca uma nova sempre que o stop ou o alvo mudam
+        (break-even, trailing ou alvo estendido), mantendo a proteção na corretora sincronizada.
         """
         if self.simulation_mode or not self.exchange:
             return
         try:
             self._cancel_open_orders_for_symbol(symbol)
-            self.exchange.create_order(
-                symbol=symbol,
-                type="limit",
-                side="sell",
-                amount=quantity,
-                price=new_take_profit,
-            )
-            logger.info(f"Ordem Limit de Take Profit atualizada na Binance ({symbol} -> ${new_take_profit}).")
+            self._place_protection_orders(symbol, quantity, stop_loss, take_profit)
         except Exception as e:
-            logger.warning(f"Aviso ao atualizar ordem de Take Profit na Binance ({symbol}): {e}")
+            logger.warning(f"Aviso ao atualizar ordens de proteção na Binance ({symbol}): {e}")
 
     def _cancel_open_orders_for_symbol(self, symbol: str) -> None:
         open_orders = self.exchange.fetch_open_orders(symbol)
         for order in open_orders:
-            self.exchange.cancel_order(order["id"], symbol)
+            self._safe_cancel(order["id"], symbol)
+
+    def _safe_cancel(self, order_id: Any, symbol: str) -> None:
+        # Cancelar uma perna da OCO cancela a outra; a segunda chamada pode falhar sem problema.
+        try:
+            self.exchange.cancel_order(order_id, symbol)
+        except Exception as e:
+            logger.debug(f"Ordem {order_id} de {symbol} já cancelada: {e}")
