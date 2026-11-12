@@ -149,6 +149,7 @@ class TelegramNotifier:
         coin = symbol.split("/")[0]
         total_invested = entry_price * qty
         tp_pct = ((tp_price - entry_price) / entry_price) * 100.0 if entry_price > 0 else 0.0
+        sl_pct = ((sl_price - entry_price) / entry_price) * 100.0 if entry_price > 0 else 0.0
         expected_profit = (tp_price - entry_price) * qty
         why_block = self._format_buy_reason_block(coin, tech_reason, sent_reason)
         portfolio_block = self._format_operation_portfolio_block(
@@ -159,7 +160,8 @@ class TelegramNotifier:
             f"🪙 <b>Moeda comprada:</b> {symbol}\n"
             f"💵 <b>Valor investido nesta compra:</b> US$ {total_invested:,.2f}\n"
             f"🏷️ <b>Preço de compra:</b> US$ {entry_price:,.4f}\n"
-            f"🎯 <b>Meta de venda:</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.1f}%</b> 👉 lucro estimado de <b>+US$ {expected_profit:,.2f}</b>)\n\n"
+            f"🎯 <b>Meta de venda:</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.2f}%</b> 👉 lucro estimado de <b>+US$ {expected_profit:,.2f}</b>)\n"
+            f"🛡️ <b>Piso de proteção inicial:</b> US$ {sl_price:,.4f} (<b>{sl_pct:.2f}%</b>)\n\n"
             f"{why_block}"
             f"{portfolio_block}"
         )
@@ -262,10 +264,10 @@ class TelegramNotifier:
             line = f"✅ <b>Lucro da Rodada:</b> +US$ {pnl_usd:,.2f} (<b>+{pnl_pct:.2f}%</b>)"
             return header, line
         if outcome == "TIME_STOP":
-            header = "⏱️ <b>CashBot — Troca por Tempo (90min)</b>"
+            header = "⏱️ <b>CashBot — Troca por Tempo (Moeda Estagnada)</b>"
             line = f"🔄 <b>Ajuste de saída p/ destravar saldo:</b> {pnl_usd:+.2f} USD ({pnl_pct:+.2f}%)"
             return header, line
-        header = "🛑 <b>CashBot — Disjuntor de Segurança (-7.5%) Acionado</b>"
+        header = f"🛑 <b>CashBot — Stop de Proteção ({pnl_pct:.2f}%) Acionado</b>"
         line = f"🛡️ <b>Perda travada p/ proteger a banca:</b> -US$ {abs(pnl_usd):,.2f} ({pnl_pct:.2f}%)"
         return header, line
 
