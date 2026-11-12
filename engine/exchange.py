@@ -373,13 +373,18 @@ class ExchangeClient:
         price_range: Dict[str, float]
     ) -> Dict[str, Any]:
         # Se stop e alvo foram tocados na mesma janela, assume o stop (postura conservadora).
+        base = {
+            "current_price": current_price,
+            "recent_high": price_range["high"],
+            "recent_low": price_range["low"],
+        }
         if stop_loss > 0 and price_range["low"] <= stop_loss:
             exit_price = min(stop_loss, price_range["open"])
-            return {"status": "CLOSED_SL", "exit_price": exit_price, "current_price": current_price}
+            return {**base, "status": "CLOSED_SL", "exit_price": exit_price}
         if price_range["high"] >= take_profit:
             exit_price = max(take_profit, price_range["open"])
-            return {"status": "CLOSED_TP", "exit_price": exit_price, "current_price": current_price}
-        return {"status": "OPEN_OCO", "exit_price": None, "current_price": current_price}
+            return {**base, "status": "CLOSED_TP", "exit_price": exit_price}
+        return {**base, "status": "OPEN_OCO", "exit_price": None}
 
     def execute_exit_order(self, symbol: str, quantity: float) -> None:
         """

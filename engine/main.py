@@ -351,6 +351,7 @@ class TradingEngine:
         )
         status = check["status"]
         current_price = float(check.get("current_price") or entry_price)
+        recent_high = float(check.get("recent_high") or current_price)
 
         if status == "CLOSED_TP":
             if self._should_ride_strong_uptrend(open_trade, current_price, take_profit, delib):
@@ -364,12 +365,15 @@ class TradingEngine:
             self._settle_closed_position(open_trade, "CLOSED_SL", exit_price, ledger, "SL")
             return True
 
-        # Break-even com proteção de taxa: andou >= +0.30% a favor, puxa o stop para entrada +0.20%
-        if current_price >= entry_price * BREAKEVEN_TRIGGER and stop_loss < entry_price:
-            stop_loss = _round_price_dynamic(entry_price * BREAKEVEN_LOCK)
+        new_stop = self._compute_trend_adjusted_stop(entry_price, current_price, recent_high, stop_loss, delib)
+        if new_stop > stop_loss:
+            stop_loss = new_stop
             self.db.update_trade_stop_loss(int(open_trade["id"]), stop_loss)
             self._sync_protection_orders(open_trade, stop_loss, take_profit)
-            logger.info(f"🛡️ Break-even ativado em {open_trade['symbol']}: Stop movido para ${stop_loss} (taxas cobertas)!")
+            logger.info(
+                f"🛡️ Stop ajustado pela tendência em {open_trade['symbol']}: "
+                f"novo piso=${stop_loss} (preço atual=${current_price}, máxima recente=${recent_high})"
+            )
 
         if self._should_trigger_time_stop(open_trade, entry_price, current_price, delib):
             close_status = "CLOSED_TP" if current_price >= entry_price else "CLOSED_SL"
@@ -378,6 +382,56 @@ class TradingEngine:
             return True
 
         return False
+
+    def _compute_trend_adjusted_stop(
+        self,
+        entry_price: float,
+        current_price: float,
+        recent_high: float,
+        current_stop: float,
+        delib: Optional[Deliberation]
+    ) -> float:
+        """
+        Avalia tanto a máxima atingida na janela (recent_high) quanto o preço e a tendência
+        no momento exato da execução (current_price), garantindo que o novo piso esteja
+        sempre abaixo da cotação atual para não disparar venda imediata indevida.
+        """
+        if entry_price <= 0 or current_price <= entry_price:
+            return current_stop
+
+        gain_now_pct = ((current_price - entry_price) / entry_price) * 100.0
+        gain_peak_pct = ((recent_high - entry_price) / entry_price) * 100.0
+        candidate = current_stop
+
+        # 1) Break-even: chegou em +0.38% na janela ou está >= +0.30% agora, e ainda sustenta >= +0.26% na execução
+        if gain_now_pct >= 0.30 or (gain_peak_pct >= 0.38 and gain_now_pct >= 0.26):
+            candidate = max(candidate, _round_price_dynamic(entry_price * BREAKEVEN_LOCK))
+
+        # 2) Subida de piso proporcional à força da tendência quando já acumula >= +0.75% no momento da execução
+        if gain_now_pct >= 0.75:
+            lock_ratio = self._resolve_profit_lock_ratio(entry_price, current_price, recent_high, delib)
+            locked_price = _round_price_dynamic(entry_price + (current_price - entry_price) * lock_ratio)
+            candidate = max(candidate, locked_price)
+
+        # Trava de segurança na execução: o piso nunca pode ficar acima de 99.80% do preço vivo atual
+        max_safe_stop = _round_price_dynamic(current_price * 0.9980)
+        return min(candidate, max_safe_stop) if candidate > current_stop else current_stop
+
+    @staticmethod
+    def _resolve_profit_lock_ratio(
+        entry_price: float,
+        current_price: float,
+        recent_high: float,
+        delib: Optional[Deliberation]
+    ) -> float:
+        pullback_from_peak_pct = ((recent_high - current_price) / entry_price) * 100.0
+        if delib is None:
+            return 0.50
+        ind = delib.indicators
+        strong_now = ind.is_strong_uptrend and ind.is_above_vwap and ind.rsi14 < 68.0 and delib.final_score >= 60.0
+        if strong_now and pullback_from_peak_pct < 0.35:
+            return 0.45
+        return 0.70
 
     def _sync_protection_orders(self, open_trade: Dict[str, Any], stop_loss: float, take_profit: float) -> None:
         self.exchange.replace_protection_orders(
