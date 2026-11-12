@@ -8,8 +8,9 @@ import os
 import time
 import logging
 import random
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import requests
+from agents.risk import calculate_ema, calculate_rsi
 
 logger = logging.getLogger("cashbot.exchange")
 
@@ -186,6 +187,33 @@ class ExchangeClient:
         except Exception as e:
             logger.warning(f"Falha ao consultar klines 15m em {base_url} para {clean_symbol}: {e}")
             return []
+
+    def is_btc_flash_crashing(self) -> Tuple[bool, str]:
+        """
+        Guarda de Choque Rápido do Bitcoin:
+        Verifica se o Bitcoin (líder do mercado) está em momento de queda aguda e violenta:
+        - Queda em 1h menor que -1.20% E
+        - Preço atual abaixo da EMA20 de 15m E
+        - RSI de 15m em colapso (< 36.0)
+        Retorna (True, motivo) para pausar compras apenas enquanto durar o choque agudo.
+        Assim que o BTC faz um candle verde ou estabiliza, libera imediatamente.
+        """
+        try:
+            candles = self._fetch_binance_klines("BTC/USDT", limit=50)
+            if len(candles) < 20:
+                return False, ""
+            closes = [c["close"] for c in candles]
+            current = closes[-1]
+            ema20 = calculate_ema(closes, 20)[-1]
+            rsi14 = calculate_rsi(closes, 14)
+            mom_1h = ((current - closes[-5]) / closes[-5]) * 100.0 if len(closes) >= 5 else 0.0
+
+            if mom_1h < -1.20 and current < ema20 and rsi14 < 36.0:
+                return True, f"BTC em queda aguda ({mom_1h:+.2f}% na última hora, RSI {rsi14:.1f} < 36)"
+            return False, ""
+        except Exception as e:
+            logger.warning(f"Não foi possível avaliar guarda do BTC: {e}")
+            return False, ""
 
     def fetch_current_price(self, symbol: str, fallback_price: float) -> float:
         """Consulta a cotação Spot em tempo real no espelho global da Binance (sem bloqueio de IP EUA)."""

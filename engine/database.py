@@ -9,8 +9,8 @@ import os
 import sqlite3
 import logging
 from contextlib import contextmanager
-from typing import Optional, Dict, Any, List, Tuple, Sequence
-from datetime import datetime
+from typing import Optional, Dict, Any, List, Tuple, Sequence, Set
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("cashbot.database")
 
@@ -240,10 +240,25 @@ class Database:
             cur.execute(query, (float(new_take_profit), int(trade_id)))
 
     def update_trade_stop_loss(self, trade_id: int, new_stop_loss: float) -> None:
-        """Recalibra o Stop Loss de Catástrofe (-7.5%) de uma posição aberta."""
+        """Recalibra o Stop Loss de uma posição aberta."""
         query = self._sql("UPDATE trades SET stop_loss = ? WHERE id = ?")
         with self._session() as cur:
             cur.execute(query, (float(new_stop_loss), int(trade_id)))
+
+    def get_symbols_in_loss_cooldown(self, minutes: int = 180) -> Set[str]:
+        """
+        Retorna símbolos que tomaram Stop Loss com prejuízo nos últimos N minutos (padrão 3h)
+        para evitar reentradas precipitadas (revenge trading / recompra de faca caindo).
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        query = self._sql(
+            "SELECT DISTINCT symbol FROM trades "
+            "WHERE status = ? AND pnl_usd < 0 AND closed_at >= ?"
+        )
+        with self._session() as cur:
+            cur.execute(query, ("CLOSED_SL", cutoff))
+            rows = cur.fetchall()
+            return {str(r[0]) for r in rows}
 
     def get_unrecovered_loss_usd(self, exclude_trade_id: int = 0) -> float:
         """

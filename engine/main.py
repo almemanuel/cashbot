@@ -34,7 +34,7 @@ logger = logging.getLogger("cashbot.main")
 WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 MAX_DYNAMIC_PAIRS = 6
 MAX_OPEN_SLOTS = 1
-MIN_SCORE_FOR_TRADE = 60.0
+MIN_SCORE_FOR_TRADE = 66.0
 TACTICAL_PROFIT_MIN_PCT = 0.40
 ROTATION_MIN_CANDIDATE_SCORE = 72.0
 ROTATION_MAX_OPEN_SCORE = 50.0
@@ -49,8 +49,8 @@ HARD_MAX_HOLD_MINUTES = 240.0
 TIME_STOP_MAX_LOSS_PCT = 1.8
 # Taxa ida+volta. Padrão 0.15% = 0.075% por lado pagando taxas com BNB (desconto de 25%).
 ROUND_TRIP_FEE_RATE = float(os.getenv("ROUND_TRIP_FEE_RATE", "0.0015"))
-BREAKEVEN_TRIGGER = 1.0030
-BREAKEVEN_LOCK = 1.0020
+BREAKEVEN_TRIGGER = 1.0060
+BREAKEVEN_LOCK = 1.0015
 CHECK_LOOKBACK_MINUTES = 16
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
@@ -403,8 +403,9 @@ class TradingEngine:
         gain_peak_pct = ((recent_high - entry_price) / entry_price) * 100.0
         candidate = current_stop
 
-        # 1) Break-even: chegou em +0.38% na janela ou está >= +0.30% agora, e ainda sustenta >= +0.26% na execução
-        if gain_now_pct >= 0.30 or (gain_peak_pct >= 0.38 and gain_now_pct >= 0.26):
+        # 1) Break-even com espaço para respirar: alcançou +0.60% agora (ou pico de +0.70% e sustenta >= +0.50%)
+        be_trigger_pct = (BREAKEVEN_TRIGGER - 1.0) * 100.0
+        if gain_now_pct >= be_trigger_pct or (gain_peak_pct >= (be_trigger_pct + 0.10) and gain_now_pct >= (be_trigger_pct - 0.10)):
             candidate = max(candidate, _round_price_dynamic(entry_price * BREAKEVEN_LOCK))
 
         # 2) Subida de piso proporcional à força da tendência quando já acumula >= +0.75% no momento da execução
@@ -668,10 +669,23 @@ class TradingEngine:
         open_trades: List[Dict[str, Any]],
         notify_wait: bool = False
     ) -> None:
+        # Guarda contra Choque Rápido do Bitcoin: se o BTC estiver em queda aguda intradiária,
+        # preserva o capital em dólar e aguarda o estancamento da sangria.
+        is_crashing, crash_reason = self.exchange.is_btc_flash_crashing()
+        if is_crashing:
+            logger.warning(f"🛡️ Guarda de Choque Ativo: Compras pausadas temporariamente ({crash_reason}). Preservando caixa em USD.")
+            return
+
         open_symbols = {str(t["symbol"]) for t in open_trades}
+        cooldown_symbols = self.db.get_symbols_in_loss_cooldown(minutes=180)
+        if cooldown_symbols:
+            logger.info(f"Ativos em Cooldown de Stop Loss (3h sem recompra): {cooldown_symbols}")
+
         valid_candidates = [
             d for d in deliberations
-            if d.is_approved(MIN_SCORE_FOR_TRADE) and d.symbol not in open_symbols
+            if d.is_approved(MIN_SCORE_FOR_TRADE) 
+            and d.symbol not in open_symbols 
+            and d.symbol not in cooldown_symbols
         ]
         if not valid_candidates:
             if notify_wait:
