@@ -511,15 +511,20 @@ class TradingEngine:
     ) -> bool:
         """
         Stop Temporal Inteligente:
-        - Entre 90m e 150m: encerra se o ativo estiver no negativo E com perda de força técnica.
-        - Aos 150m: encerra se ainda não engatou alta (< +0.40%).
-        - Aos 240m: teto absoluto para reciclar o capital.
+        - Antes de vender por tempo, checa se compraria a moeda novamente agora (Score >= 66 e sem veto).
+        - Se sim, mantém a posição e sobe o stop de proteção em vez de vender e pagar taxas à toa.
+        - Se não, encerra aos 150m (se < +0.40%), aos 240m (teto) ou entre 90m-150m se estiver fraca.
         """
         if entry_price <= 0:
             return False
         age_minutes = self._compute_trade_age_minutes(open_trade.get("created_at"))
         if age_minutes < TIME_STOP_MINUTES:
             return False
+
+        if self._would_buy_again_now(delib, entry_price, current_price):
+            self._tighten_stop_on_hold(open_trade, current_price, delib)
+            return False
+
         if age_minutes >= HARD_MAX_HOLD_MINUTES:
             return True
 
@@ -531,6 +536,30 @@ class TradingEngine:
 
         tech_weak = delib is not None and (delib.final_score < 55.0 or delib.indicators.rsi14 < 45.0)
         return unrealized_pct < -0.40 and tech_weak
+
+    @staticmethod
+    def _would_buy_again_now(delib: Optional[Deliberation], entry_price: float, current_price: float) -> bool:
+        if delib is None or not delib.is_approved(MIN_SCORE_FOR_TRADE):
+            return False
+        return current_price >= entry_price * 0.996
+
+    def _tighten_stop_on_hold(
+        self,
+        open_trade: Dict[str, Any],
+        current_price: float,
+        delib: Optional[Deliberation]
+    ) -> None:
+        current_stop = float(open_trade["stop_loss"])
+        tightened = _round_price_dynamic(current_price * 0.995)
+        if tightened <= current_stop:
+            return
+        self.db.update_trade_stop_loss(int(open_trade["id"]), tightened)
+        self._sync_protection_orders(open_trade, tightened, float(open_trade["take_profit"]))
+        score = delib.final_score if delib else 0.0
+        logger.info(
+            f"⏳ {open_trade['symbol']} ainda aprovada (Score {score:.1f}): "
+            f"mantendo posição sem pagar nova taxa e subindo stop para ${tightened}."
+        )
 
     @staticmethod
     def _compute_trade_age_minutes(created_at: Any) -> float:
