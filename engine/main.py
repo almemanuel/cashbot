@@ -681,9 +681,11 @@ class TradingEngine:
             return
 
         open_symbols = {str(t["symbol"]) for t in open_trades}
-        cooldown_symbols = self.db.get_symbols_in_loss_cooldown(minutes=180)
+        loss_cooldown = self.db.get_symbols_in_loss_cooldown(minutes=180)
+        recent_cooldown = self.db.get_recently_closed_symbols(minutes=45)
+        cooldown_symbols = loss_cooldown | recent_cooldown
         if cooldown_symbols:
-            logger.info(f"Ativos em Cooldown de Stop Loss (3h sem recompra): {cooldown_symbols}")
+            logger.info(f"Ativos em Cooldown (3h perda / 45m pós-venda): {cooldown_symbols}")
 
         valid_candidates = [
             d for d in deliberations

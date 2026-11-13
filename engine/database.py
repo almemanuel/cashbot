@@ -260,6 +260,21 @@ class Database:
             rows = cur.fetchall()
             return {str(r[0]) for r in rows}
 
+    def get_recently_closed_symbols(self, minutes: int = 45) -> Set[str]:
+        """
+        Retorna símbolos encerrados nos últimos N minutos (mesmo no lucro) para impedir
+        que o robô venda uma moeda e a recompre no mesmo segundo pagando taxas dobradas.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        query = self._sql(
+            "SELECT DISTINCT symbol FROM trades "
+            "WHERE status LIKE ? AND closed_at >= ?"
+        )
+        with self._session() as cur:
+            cur.execute(query, ("CLOSED_%", cutoff))
+            rows = cur.fetchall()
+            return {str(r[0]) for r in rows}
+
     def is_in_consecutive_loss_pause(self, streak: int = 2, pause_minutes: int = 120) -> bool:
         """
         Circuit Breaker Global: se os últimos N trades encerrados foram todos prejuízos
