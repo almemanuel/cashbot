@@ -38,8 +38,8 @@ SYNTHETIC_BASE_PRICES = {
 }
 EXCLUDED_BASES = {
     "USDC", "FDUSD", "USDT", "DAI", "TUSD", "BUSD", "USDP",
-    "USDE", "EUR", "GBP", "PAXG", "WBTC", "USD1", "First",
-    "BTC", "ETH", "RLUSD", "PYUSD", "GUSD", "FRAX", "AEUR", "EURI", "USTC"
+    "USDE", "EUR", "GBP", "PAXG", "XAUT", "XAG", "SLV", "WBTC", "USD1", "First",
+    "BTC", "ETH", "RLUSD", "PYUSD", "GUSD", "FRAX", "AEUR", "EURI", "USTC", "USDS", "USDY"
 }
 LEVERAGED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR")
 MIN_QUOTE_VOLUME_USD = 35_000_000.0
@@ -190,13 +190,11 @@ class ExchangeClient:
 
     def is_btc_flash_crashing(self) -> Tuple[bool, str]:
         """
-        Guarda de Choque Rápido do Bitcoin:
-        Verifica se o Bitcoin (líder do mercado) está em momento de queda aguda e violenta:
-        - Queda em 1h menor que -1.20% E
-        - Preço atual abaixo da EMA20 de 15m E
-        - RSI de 15m em colapso (< 36.0)
-        Retorna (True, motivo) para pausar compras apenas enquanto durar o choque agudo.
-        Assim que o BTC faz um candle verde ou estabiliza, libera imediatamente.
+        Guarda Antecipado de Choque do Bitcoin:
+        Pausa compras quando o BTC entra em aceleração de queda intradiária:
+        - Queda na última hora < -0.75% E preço abaixo da EMA20 (15m) E RSI < 42, OU
+        - Queda brusca nos últimos 30 min (< -0.60%) com preço abaixo da EMA20.
+        Libera imediatamente assim que o BTC estabiliza acima da pressão vendedora.
         """
         try:
             candles = self._fetch_binance_klines("BTC/USDT", limit=50)
@@ -207,9 +205,10 @@ class ExchangeClient:
             ema20 = calculate_ema(closes, 20)[-1]
             rsi14 = calculate_rsi(closes, 14)
             mom_1h = ((current - closes[-5]) / closes[-5]) * 100.0 if len(closes) >= 5 else 0.0
+            mom_30m = ((current - closes[-3]) / closes[-3]) * 100.0 if len(closes) >= 3 else 0.0
 
-            if mom_1h < -1.20 and current < ema20 and rsi14 < 36.0:
-                return True, f"BTC em queda aguda ({mom_1h:+.2f}% na última hora, RSI {rsi14:.1f} < 36)"
+            if (mom_1h < -0.75 and current < ema20 and rsi14 < 42.0) or (mom_30m < -0.60 and current < ema20):
+                return True, f"BTC em queda (1h: {mom_1h:+.2f}%, 30m: {mom_30m:+.2f}%, RSI: {rsi14:.1f})"
             return False, ""
         except Exception as e:
             logger.warning(f"Não foi possível avaliar guarda do BTC: {e}")

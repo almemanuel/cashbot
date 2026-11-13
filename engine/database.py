@@ -260,6 +260,32 @@ class Database:
             rows = cur.fetchall()
             return {str(r[0]) for r in rows}
 
+    def is_in_consecutive_loss_pause(self, streak: int = 2, pause_minutes: int = 120) -> bool:
+        """
+        Circuit Breaker Global: se os últimos N trades encerrados foram todos prejuízos
+        significativos (< -US$ 1.00) e o último fechou há menos de 2h, pausa novas compras
+        para evitar cascata de stops durante turbulência no mercado.
+        """
+        query = self._sql(
+            "SELECT pnl_usd, closed_at FROM trades "
+            "WHERE status LIKE ? "
+            "ORDER BY id DESC LIMIT ?"
+        )
+        with self._session() as cur:
+            cur.execute(query, ("CLOSED_%", int(streak)))
+            rows = cur.fetchall()
+            if len(rows) < streak or not all(float(r[0] or 0.0) < -1.0 for r in rows):
+                return False
+            latest_closed = rows[0][1]
+            if not latest_closed:
+                return False
+            if isinstance(latest_closed, str):
+                latest_closed = datetime.fromisoformat(latest_closed.replace("Z", "+00:00"))
+            if latest_closed.tzinfo is None:
+                latest_closed = latest_closed.replace(tzinfo=timezone.utc)
+            elapsed_min = (datetime.now(timezone.utc) - latest_closed).total_seconds() / 60.0
+            return elapsed_min < pause_minutes
+
     def get_unrecovered_loss_usd(self, exclude_trade_id: int = 0) -> float:
         """
         Calcula o saldo de prejuízo acumulado ainda não recuperado pelos lucros subsequentes

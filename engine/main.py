@@ -676,6 +676,10 @@ class TradingEngine:
             logger.warning(f"🛡️ Guarda de Choque Ativo: Compras pausadas temporariamente ({crash_reason}). Preservando caixa em USD.")
             return
 
+        if self.db.is_in_consecutive_loss_pause(streak=2, pause_minutes=120):
+            logger.warning("🛑 Circuit Breaker de Perdas Seguidas: 2 stops consecutivos detectados. Pausando novas compras por 2h para proteger o caixa.")
+            return
+
         open_symbols = {str(t["symbol"]) for t in open_trades}
         cooldown_symbols = self.db.get_symbols_in_loss_cooldown(minutes=180)
         if cooldown_symbols:
