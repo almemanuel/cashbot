@@ -8,12 +8,12 @@ Segue Object Calisthenics (1 nível de indentação por método, sem else).
 import math
 from typing import List, Dict, Any, Tuple
 
-DEFAULT_STOP_PCT = 1.50
-MIN_STOP_PCT = 1.20
-MAX_STOP_PCT = 1.80
-MIN_TP_PCT = 0.80
-MAX_TP_PCT = 3.00
-DEFAULT_TP_PCT = 1.50
+DEFAULT_STOP_PCT = 1.05
+MIN_STOP_PCT = 0.95
+MAX_STOP_PCT = 1.30
+MIN_TP_PCT = 1.35
+MAX_TP_PCT = 2.50
+DEFAULT_TP_PCT = 1.60
 BINANCE_MIN_NOTIONAL_USD = 10.0
 SAFE_MIN_SLOT_USD = 12.0
 MAX_CONCURRENT_POSITIONS = 1

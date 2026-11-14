@@ -41,8 +41,8 @@ ROTATION_MAX_OPEN_SCORE = 50.0
 ROTATION_MIN_HOLD_MINUTES = 30.0
 ROTATION_MIN_PNL_PCT = -0.15
 ROTATION_MAX_PNL_PCT = 0.40
-DEFAULT_STOP_PCT = 1.50
-DEFAULT_TP_PCT = 1.50
+DEFAULT_STOP_PCT = 1.05
+DEFAULT_TP_PCT = 1.60
 TIME_STOP_MINUTES = 90.0
 MAX_HOLD_MINUTES = 150.0
 HARD_MAX_HOLD_MINUTES = 240.0
@@ -408,8 +408,8 @@ class TradingEngine:
         if gain_now_pct >= be_trigger_pct or (gain_peak_pct >= (be_trigger_pct + 0.10) and gain_now_pct >= (be_trigger_pct - 0.10)):
             candidate = max(candidate, _round_price_dynamic(entry_price * BREAKEVEN_LOCK))
 
-        # 2) Subida de piso proporcional à força da tendência quando já acumula >= +0.75% no momento da execução
-        if gain_now_pct >= 0.75:
+        # 2) Subida de piso proporcional à força da tendência quando já acumula >= +1.15% no momento da execução
+        if gain_now_pct >= 1.15:
             lock_ratio = self._resolve_profit_lock_ratio(entry_price, current_price, recent_high, delib)
             locked_price = _round_price_dynamic(entry_price + (current_price - entry_price) * lock_ratio)
             candidate = max(candidate, locked_price)
@@ -475,7 +475,7 @@ class TradingEngine:
         if entry_price <= 0:
             return current_tp
         tp_pct = ((current_tp - entry_price) / entry_price) * 100.0
-        if tp_pct >= 0.80:
+        if tp_pct >= 1.35:
             return current_tp
 
         new_tp = _round_price_dynamic(entry_price * (1.0 + (DEFAULT_TP_PCT / 100.0)))
