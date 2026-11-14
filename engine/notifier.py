@@ -142,7 +142,8 @@ class TelegramNotifier:
         current_portfolio_total: float = 0.0,
         invested_total: float = 0.0,
         free_cash: float = 0.0,
-        withdrawable_pool: float = 0.0
+        withdrawable_pool: float = 0.0,
+        regime_note: str = ""
     ) -> bool:
         """Notifica abertura de compra em linguagem limpa, simples e completa para leigos."""
         tag = "🧪 <b>[TESTE SIMULADO]</b>\n" if is_simulated else ""
@@ -152,6 +153,7 @@ class TelegramNotifier:
         sl_pct = ((sl_price - entry_price) / entry_price) * 100.0 if entry_price > 0 else 0.0
         expected_profit = (tp_price - entry_price) * qty
         why_block = self._format_buy_reason_block(coin, tech_reason, sent_reason)
+        regime_block = f"🛡️ <b>Postura de Mercado:</b> {regime_note}\n" if regime_note else ""
         portfolio_block = self._format_operation_portfolio_block(
             prev_portfolio_total, current_portfolio_total, 0.0, invested_total, free_cash, withdrawable_pool
         )
@@ -161,7 +163,8 @@ class TelegramNotifier:
             f"💵 <b>Valor investido nesta compra:</b> US$ {total_invested:,.2f}\n"
             f"🏷️ <b>Preço de compra:</b> US$ {entry_price:,.4f}\n"
             f"🎯 <b>Meta de venda:</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.2f}%</b> 👉 lucro estimado de <b>+US$ {expected_profit:,.2f}</b>)\n"
-            f"🛡️ <b>Piso de proteção inicial:</b> US$ {sl_price:,.4f} (<b>{sl_pct:.2f}%</b>)\n\n"
+            f"🛡️ <b>Piso de proteção inicial:</b> US$ {sl_price:,.4f} (<b>{sl_pct:.2f}%</b>)\n"
+            f"{regime_block}\n"
             f"{why_block}"
             f"{portfolio_block}"
         )

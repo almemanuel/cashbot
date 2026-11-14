@@ -222,15 +222,18 @@ class RiskAgent:
         self,
         free_balance: float,
         scores: List[float],
-        open_positions_count: int = 0
+        open_positions_count: int = 0,
+        capital_usage_pct: float = 0.0
     ) -> List[float]:
         """
-        Modo Sniper: concentra o capital disponível (85%) na única melhor oportunidade do ranking.
+        Modo Sniper: concentra o capital disponível na única melhor oportunidade do ranking.
+        Permite sobrescrever o percentual de uso de capital conforme o regime de mercado.
         """
         if open_positions_count >= MAX_CONCURRENT_POSITIONS or not scores:
             return []
 
-        deployable = round(free_balance * self.capital_usage_pct, 2)
+        usage_pct = capital_usage_pct if capital_usage_pct > 0 else self.capital_usage_pct
+        deployable = round(free_balance * usage_pct, 2)
         if deployable < BINANCE_MIN_NOTIONAL_USD:
             return []
 

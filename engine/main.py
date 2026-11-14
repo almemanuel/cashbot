@@ -691,6 +691,29 @@ class TradingEngine:
         veto = bool(tech_res["veto"] or sent_res["veto"])
         return tech_score, sent_score, final_score, veto
 
+    def _get_active_cooldowns(self) -> set:
+        loss_cooldown = self.db.get_symbols_in_loss_cooldown(minutes=180)
+        recent_cooldown = self.db.get_recently_closed_symbols(minutes=45)
+        cooldown_symbols = loss_cooldown | recent_cooldown
+        if cooldown_symbols:
+            logger.info(f"Ativos em Cooldown (3h perda / 45m pós-venda): {cooldown_symbols}")
+        return cooldown_symbols
+
+    def _filter_valid_candidates(
+        self,
+        deliberations: List[Deliberation],
+        open_trades: List[Dict[str, Any]],
+        cooldown_symbols: set,
+        min_score: float
+    ) -> List[Deliberation]:
+        open_symbols = {str(t["symbol"]) for t in open_trades}
+        return [
+            d for d in deliberations
+            if d.is_approved(min_score)
+            and d.symbol not in open_symbols
+            and d.symbol not in cooldown_symbols
+        ]
+
     def _decide_and_execute(
         self,
         deliberations: List[Deliberation],
@@ -698,33 +721,26 @@ class TradingEngine:
         open_trades: List[Dict[str, Any]],
         notify_wait: bool = False
     ) -> None:
-        # Guarda contra Choque Rápido do Bitcoin: se o BTC estiver em queda aguda intradiária,
-        # preserva o capital em dólar e aguarda o estancamento da sangria.
-        is_crashing, crash_reason = self.exchange.is_btc_flash_crashing()
-        if is_crashing:
-            logger.warning(f"🛡️ Guarda de Choque Ativo: Compras pausadas temporariamente ({crash_reason}). Preservando caixa em USD.")
+        regime = self.exchange.assess_market_regime()
+        logger.info(
+            f"📊 Regime de Mercado: {regime['regime']} | {regime['reason']} "
+            f"(min_score={regime['min_score']:.0f}, capital={regime['capital_pct']*100:.0f}%)"
+        )
+        if regime["regime"] == "CRASH":
+            logger.warning(f"🛡️ Guarda de Choque Ativo: Compras pausadas temporariamente ({regime['reason']}). Preservando caixa em USD.")
             return
 
         if self.db.is_in_consecutive_loss_pause(streak=2, pause_minutes=120):
             logger.warning("🛑 Circuit Breaker de Perdas Seguidas: 2 stops consecutivos detectados. Pausando novas compras por 2h para proteger o caixa.")
             return
 
-        open_symbols = {str(t["symbol"]) for t in open_trades}
-        loss_cooldown = self.db.get_symbols_in_loss_cooldown(minutes=180)
-        recent_cooldown = self.db.get_recently_closed_symbols(minutes=45)
-        cooldown_symbols = loss_cooldown | recent_cooldown
-        if cooldown_symbols:
-            logger.info(f"Ativos em Cooldown (3h perda / 45m pós-venda): {cooldown_symbols}")
-
-        valid_candidates = [
-            d for d in deliberations
-            if d.is_approved(MIN_SCORE_FOR_TRADE) 
-            and d.symbol not in open_symbols 
-            and d.symbol not in cooldown_symbols
-        ]
+        cooldown_symbols = self._get_active_cooldowns()
+        valid_candidates = self._filter_valid_candidates(
+            deliberations, open_trades, cooldown_symbols, float(regime["min_score"])
+        )
+        if not valid_candidates and notify_wait:
+            self._notify_no_opportunity(deliberations, ledger)
         if not valid_candidates:
-            if notify_wait:
-                self._notify_no_opportunity(deliberations, ledger)
             return
 
         ranked_candidates = sorted(valid_candidates, key=lambda x: x.final_score, reverse=True)
@@ -735,9 +751,12 @@ class TradingEngine:
             free_balance=free_capital,
             scores=[c.final_score for c in ranked_candidates],
             open_positions_count=len(open_trades),
+            capital_usage_pct=float(regime["capital_pct"]),
         )
         for candidate, allocated_usd in zip(ranked_candidates, allocations):
-            self._open_position_for_candidate(candidate, deliberations, allocated_usd)
+            self._open_position_for_candidate(
+                candidate, deliberations, allocated_usd, regime_note=regime["reason"]
+            )
 
     def _sync_free_balance_before_orders(self, ledger: Dict[str, float], locked_usd: float) -> float:
         """
@@ -777,7 +796,8 @@ class TradingEngine:
         self,
         candidate: Deliberation,
         deliberations: List[Deliberation],
-        trading_balance: float
+        trading_balance: float,
+        regime_note: str = ""
     ) -> None:
         symbol = candidate.symbol
         entry_price = candidate.indicators.current_price
@@ -832,6 +852,7 @@ class TradingEngine:
             invested_total=invested_usd,
             free_cash=free_cash,
             withdrawable_pool=float(cur_ledger["withdrawable_pool"]),
+            regime_note=regime_note,
         )
         logger.info("=== CICLO OPERACIONAL CONCLUÍDO COM SUCESSO ===")
 

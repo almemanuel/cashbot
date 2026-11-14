@@ -188,31 +188,57 @@ class ExchangeClient:
             logger.warning(f"Falha ao consultar klines 15m em {base_url} para {clean_symbol}: {e}")
             return []
 
-    def is_btc_flash_crashing(self) -> Tuple[bool, str]:
+    def assess_market_regime(self) -> dict:
         """
-        Guarda Antecipado de Choque do Bitcoin:
-        Pausa compras quando o BTC entra em aceleração de queda intradiária:
-        - Queda na última hora < -0.75% E preço abaixo da EMA20 (15m) E RSI < 42, OU
-        - Queda brusca nos últimos 30 min (< -0.60%) com preço abaixo da EMA20.
-        Libera imediatamente assim que o BTC estabiliza acima da pressão vendedora.
+        Avalia o regime atual do mercado via Bitcoin (15m):
+        - CRASH: queda aguda intradiária -> pausa compras (0% capital).
+        - DEFENSIVO: BTC abaixo da EMA50/EMA200 ou RSI < 45 -> entradas pontuais (35% capital, score >= 74).
+        - FAVORAVEL: BTC saudável acima das médias -> alocação normal (70% capital, score >= 66).
         """
         try:
-            candles = self._fetch_binance_klines("BTC/USDT", limit=50)
-            if len(candles) < 20:
-                return False, ""
-            closes = [c["close"] for c in candles]
-            current = closes[-1]
-            ema20 = calculate_ema(closes, 20)[-1]
-            rsi14 = calculate_rsi(closes, 14)
-            mom_1h = ((current - closes[-5]) / closes[-5]) * 100.0 if len(closes) >= 5 else 0.0
-            mom_30m = ((current - closes[-3]) / closes[-3]) * 100.0 if len(closes) >= 3 else 0.0
-
-            if (mom_1h < -0.75 and current < ema20 and rsi14 < 42.0) or (mom_30m < -0.60 and current < ema20):
-                return True, f"BTC em queda (1h: {mom_1h:+.2f}%, 30m: {mom_30m:+.2f}%, RSI: {rsi14:.1f})"
-            return False, ""
+            candles = self._fetch_binance_klines("BTC/USDT", limit=210)
+            if len(candles) < 50:
+                return self._build_regime("FAVORAVEL", 0.70, 66.0, "Dados insuficientes de BTC; mantendo padrão.")
+            return self._classify_btc_candles(candles)
         except Exception as e:
-            logger.warning(f"Não foi possível avaliar guarda do BTC: {e}")
-            return False, ""
+            logger.warning(f"Não foi possível avaliar regime do BTC: {e}")
+            return self._build_regime("FAVORAVEL", 0.70, 66.0, "Falha na leitura do BTC; mantendo padrão.")
+
+    def _classify_btc_candles(self, candles: List[dict]) -> dict:
+        closes = [c["close"] for c in candles]
+        current = closes[-1]
+        ema20 = calculate_ema(closes, 20)[-1]
+        ema50 = calculate_ema(closes, 50)[-1]
+        ema200 = calculate_ema(closes, 200)[-1] if len(closes) >= 200 else ema50
+        rsi14 = calculate_rsi(closes, 14)
+        mom_1h = ((current - closes[-5]) / closes[-5]) * 100.0 if len(closes) >= 5 else 0.0
+        mom_30m = ((current - closes[-3]) / closes[-3]) * 100.0 if len(closes) >= 3 else 0.0
+
+        if (mom_1h < -0.75 and current < ema20 and rsi14 < 42.0) or (mom_30m < -0.60 and current < ema20):
+            reason = f"BTC em queda rápida (1h: {mom_1h:+.2f}%, 30m: {mom_30m:+.2f}%, RSI: {rsi14:.1f})"
+            return self._build_regime("CRASH", 0.0, 100.0, reason)
+
+        if current < ema50 or current < ema200 or rsi14 < 45.0:
+            reason = f"Mercado desfavorável (BTC abaixo das EMAs/RSI {rsi14:.1f}, 1h: {mom_1h:+.2f}%) — operação pontual com 35% do caixa"
+            return self._build_regime("DEFENSIVO", 0.35, 74.0, reason)
+
+        reason = f"Mercado favorável (BTC acima das EMAs, RSI {rsi14:.1f}, 1h: {mom_1h:+.2f}%)"
+        return self._build_regime("FAVORAVEL", 0.70, 66.0, reason)
+
+    def _build_regime(self, regime: str, capital_pct: float, min_score: float, reason: str) -> dict:
+        return {
+            "regime": regime,
+            "capital_pct": capital_pct,
+            "min_score": min_score,
+            "reason": reason,
+        }
+
+    def is_btc_flash_crashing(self) -> Tuple[bool, str]:
+        """Mantido por compatibilidade: verifica se o regime atual é CRASH."""
+        assessment = self.assess_market_regime()
+        if assessment["regime"] == "CRASH":
+            return True, assessment["reason"]
+        return False, ""
 
     def fetch_current_price(self, symbol: str, fallback_price: float) -> float:
         """Consulta a cotação Spot em tempo real no espelho global da Binance (sem bloqueio de IP EUA)."""
