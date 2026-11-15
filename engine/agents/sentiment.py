@@ -172,14 +172,6 @@ class SentimentAgent:
         fng = FearAndGreed(value=int(fng_dict["value"]), classification=str(fng_dict["classification"]))
         headlines = HeadlineCollection(self.get_recent_news(symbol, limit=5))
 
-        if fng.is_extreme_panic:
-            verdict = AgentVerdict(
-                score=float(fng.value),
-                veto=True,
-                reasoning=f"Veto do Agente de Sentimento: Fear & Greed em {fng.value} ({fng.classification}) indica pânico generalizado."
-            )
-            return verdict.to_dict()
-
         if not self.api_key:
             logger.warning("GEMINI_API_KEY não configurada. Usando sentimento baseado em Fear & Greed + manchetes ao vivo.")
             return self._heuristic_analysis(symbol, fng_dict, headlines.top(5))
@@ -385,14 +377,14 @@ Responda EXCLUSIVAMENTE em formato JSON com o schema:
 
         return AgentVerdict(
             score=round(final_score, 2),
-            veto=val < 20,
+            veto=False,
             reasoning=news_summary
         ).to_dict()
 
     @staticmethod
     def _compute_fng_base_score(val: int) -> float:
         if val < 20:
-            return float(val)
+            return 40.0 + val * 0.25
         if val < 40:
             return 45.0 + (val - 20) * 0.5
         if val <= 75:
