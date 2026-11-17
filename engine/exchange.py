@@ -218,7 +218,7 @@ class ExchangeClient:
             reason = f"BTC em queda rápida (1h: {mom_1h:+.2f}%, 30m: {mom_30m:+.2f}%, RSI: {rsi14:.1f})"
             return self._build_regime("CRASH", 0.0, 100.0, reason)
 
-        if current < ema50 or current < ema200 or rsi14 < 45.0:
+        if current < ema50 or current < ema200 or rsi14 < 50.0 or mom_1h <= 0.0:
             reason = f"Mercado desfavorável (BTC abaixo das EMAs/RSI {rsi14:.1f}, 1h: {mom_1h:+.2f}%) — operação pontual com 35% do caixa"
             return self._build_regime("DEFENSIVO", 0.35, 74.0, reason)
 

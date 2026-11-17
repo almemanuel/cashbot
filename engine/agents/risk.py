@@ -10,9 +10,9 @@ from typing import List, Dict, Any, Tuple
 
 DEFAULT_STOP_PCT = 1.05
 MIN_STOP_PCT = 0.95
-MAX_STOP_PCT = 1.30
+MAX_STOP_PCT = 1.80
 MIN_TP_PCT = 1.35
-MAX_TP_PCT = 2.50
+MAX_TP_PCT = 2.80
 DEFAULT_TP_PCT = 1.60
 BINANCE_MIN_NOTIONAL_USD = 10.0
 SAFE_MIN_SLOT_USD = 12.0
@@ -191,32 +191,39 @@ class RiskAgent:
     def _resolve_stop_pct(entry_price: float, atr14: float, ai_stop_pct: float) -> float:
         if entry_price <= 0:
             return DEFAULT_STOP_PCT
-        if ai_stop_pct > 0:
-            return round(max(MIN_STOP_PCT, min(MAX_STOP_PCT, ai_stop_pct)), 2)
-        if atr14 > 0:
-            atr_pct = (atr14 / entry_price) * 100.0 * 1.5
-            return round(max(MIN_STOP_PCT, min(MAX_STOP_PCT, atr_pct)), 2)
-        return DEFAULT_STOP_PCT
+        atr_stop = (atr14 / entry_price) * 100.0 * 1.5 if atr14 > 0 else 0.0
+        base_stop = max(atr_stop, ai_stop_pct) if ai_stop_pct > 0 else (atr_stop or DEFAULT_STOP_PCT)
+        return round(max(MIN_STOP_PCT, min(MAX_STOP_PCT, base_stop)), 2)
 
     @staticmethod
     def _resolve_tp_pct(stop_pct: float, ai_tp_pct: float) -> float:
-        if ai_tp_pct > 0:
-            clamped_ai = max(MIN_TP_PCT, min(MAX_TP_PCT, ai_tp_pct))
-            return round(clamped_ai, 2)
-        return DEFAULT_TP_PCT
+        vol_tp = stop_pct * 1.55
+        target_tp = max(vol_tp, ai_tp_pct) if ai_tp_pct > 0 else max(DEFAULT_TP_PCT, vol_tp)
+        return round(max(MIN_TP_PCT, min(MAX_TP_PCT, target_tp)), 2)
 
     def calculate_position_size(self, allocated_usd: float, entry_price: float, stop_dist: float) -> float:
         """
-        Converte o capital em dólar alocado para este slot na quantidade exata de moedas,
-        respeitando o lote mínimo de US$ 10.00 da Binance Spot.
+        Converte o capital alocado na quantidade de moedas, escalando a mão para baixo
+        quando a volatilidade exige stop mais largo (mantendo o risco máximo em dólar estável).
         """
         if allocated_usd < BINANCE_MIN_NOTIONAL_USD or entry_price <= 0:
             return 0.0
 
-        raw_qty = allocated_usd / entry_price
+        effective_usd = self._scale_usd_for_volatility(allocated_usd, entry_price, stop_dist)
+        raw_qty = effective_usd / entry_price
         if entry_price < 0.01:
             return round(raw_qty, 0)
         return round(raw_qty, 6)
+
+    @staticmethod
+    def _scale_usd_for_volatility(allocated_usd: float, entry_price: float, stop_dist: float) -> float:
+        if stop_dist <= 0:
+            return allocated_usd
+        stop_pct = (stop_dist / entry_price) * 100.0
+        if stop_pct <= DEFAULT_STOP_PCT:
+            return allocated_usd
+        scaled = allocated_usd * (DEFAULT_STOP_PCT / stop_pct)
+        return max(BINANCE_MIN_NOTIONAL_USD, round(scaled, 2))
 
     def split_capital_for_candidates(
         self,
