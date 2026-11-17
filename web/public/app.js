@@ -424,6 +424,37 @@ function computeProfitAtTime(timeMs, allTrades) {
 }
 
 // Renderiza os 2 Gráficos: (1) Capital Total ao Longo do Tempo e (2) Resultado dos Trades (Lucros & Prejuízos)
+function extractDayKeyBr(rawDateStr) {
+  const formatted = formatTimestampBr(rawDateStr);
+  if (!formatted) return 'Hoje';
+  return formatted.split(' às ')[0];
+}
+
+function groupLedgerByEndOfDay(history) {
+  const sorted = [...history].sort((a, b) => parseDbTimeMs(a.updated_at) - parseDbTimeMs(b.updated_at));
+  const dailyMap = new Map();
+  sorted.forEach(point => {
+    const dayKey = extractDayKeyBr(point.updated_at);
+    dailyMap.set(dayKey, point);
+  });
+  return Array.from(dailyMap.entries()).map(([dayKey, point]) => ({
+    label: dayKey.slice(0, 5),
+    point,
+  }));
+}
+
+function groupTradesByEndOfDay(closedTrades) {
+  const dailyMap = new Map();
+  closedTrades.forEach(t => {
+    const dayKey = extractDayKeyBr(t.closed_at || t.created_at);
+    const existing = dailyMap.get(dayKey) || { label: dayKey.slice(0, 5), pnl: 0, count: 0 };
+    existing.pnl = Math.round((existing.pnl + Number(t.pnl_usd || 0)) * 100) / 100;
+    existing.count += 1;
+    dailyMap.set(dayKey, existing);
+  });
+  return Array.from(dailyMap.values());
+}
+
 function renderPortfolioChart(history, trades, openTrades, currentTrading, currentWithdraw, currentInvested) {
   if (typeof Chart === 'undefined') return;
 
@@ -438,21 +469,18 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
     }
   };
 
-  // 1. Gráfico de Patrimônio Total & Flutuação da Banca
+  // 1. Gráfico de Patrimônio Total & Flutuação da Banca (consolidado no fim de cada dia)
   const baseCapital = 1000.0;
-  const ledgerPoints = (history && history.length > 0)
+  const rawHistory = (history && history.length > 0)
     ? history
     : [{ trading_balance: currentTrading, withdrawable_pool: currentWithdraw, updated_at: new Date().toISOString() }];
 
-  const capitalLabels = ledgerPoints.map((p, idx) => {
-    const formatted = formatTimestampBr(p.updated_at);
-    return formatted ? formatted.replace(/\/\d{4} às /, ' ') : `Pt ${idx + 1}`;
+  const dailyLedger = groupLedgerByEndOfDay(rawHistory);
+  const capitalLabels = dailyLedger.map(item => item.label);
+  const totalCapitalSeries = dailyLedger.map(item => {
+    return Number(item.point.trading_balance || 0) + Number(item.point.withdrawable_pool || 0);
   });
-
-  const totalCapitalSeries = ledgerPoints.map(p => {
-    return Number(p.trading_balance || 0) + Number(p.withdrawable_pool || 0);
-  });
-  const baseCapitalSeries = ledgerPoints.map(() => baseCapital);
+  const baseCapitalSeries = dailyLedger.map(() => baseCapital);
 
   const currentCapital = totalCapitalSeries[totalCapitalSeries.length - 1] || baseCapital;
   const capitalDiff = Math.round((currentCapital - baseCapital) * 100) / 100;
@@ -530,15 +558,13 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
   const singlePnlSeries = [];
   const barColors = [];
 
-  closedTrades.forEach(t => {
-    const pnl = Number(t.pnl_usd || 0);
-    cumPnl = Math.round((cumPnl + pnl) * 100) / 100;
-    const coin = (t.symbol || '').split('/')[0];
-    const timeStr = formatTimestampBr(t.closed_at || t.created_at).replace(/\/\d{4} às /, ' ');
-    tradeLabels.push(`#${t.id} ${coin} (${timeStr})`);
+  const dailyTrades = groupTradesByEndOfDay(closedTrades);
+  dailyTrades.forEach(day => {
+    cumPnl = Math.round((cumPnl + day.pnl) * 100) / 100;
+    tradeLabels.push(`${day.label} (${day.count})`);
     cumPnlSeries.push(cumPnl);
-    singlePnlSeries.push(pnl);
-    barColors.push(pnl >= 0 ? 'rgba(16, 185, 129, 0.75)' : 'rgba(244, 63, 94, 0.75)');
+    singlePnlSeries.push(day.pnl);
+    barColors.push(day.pnl >= 0 ? 'rgba(16, 185, 129, 0.75)' : 'rgba(244, 63, 94, 0.75)');
   });
 
   const totalRealized = closedTrades.length > 0 ? cumPnl : (overviewData?.total_realized_pnl ?? 0);
@@ -574,7 +600,7 @@ function renderPortfolioChart(history, trades, openTrades, currentTrading, curre
           },
           {
             type: 'bar',
-            label: 'PnL do Trade ($)',
+            label: 'PnL do Dia ($)',
             data: singlePnlSeries.length > 0 ? singlePnlSeries : [0],
             backgroundColor: barColors.length > 0 ? barColors : ['rgba(16, 185, 129, 0.5)'],
             borderRadius: 4,

@@ -127,6 +127,16 @@ class TelegramNotifier:
             )
         return f"• {html.escape(details)}"
 
+    @staticmethod
+    def _format_price(price: float) -> str:
+        """Formata preços com precisão adaptativa para moedas de centavos ou frações."""
+        abs_p = abs(price)
+        if abs_p > 0 and abs_p < 0.01:
+            return f"{price:,.8f}"
+        if abs_p < 1.0:
+            return f"{price:,.6f}"
+        return f"{price:,.4f}"
+
     def notify_order_placed(
         self,
         symbol: str,
@@ -155,15 +165,16 @@ class TelegramNotifier:
         why_block = self._format_buy_reason_block(coin, tech_reason, sent_reason)
         regime_block = f"🛡️ <b>Postura de Mercado:</b> {regime_note}\n" if regime_note else ""
         portfolio_block = self._format_operation_portfolio_block(
-            prev_portfolio_total, current_portfolio_total, 0.0, invested_total, free_cash, withdrawable_pool
+            prev_portfolio_total, current_portfolio_total, 0.0, invested_total, free_cash, withdrawable_pool,
+            show_before_after=False,
         )
         msg = (
             f"{tag}🟢 <b>CashBot — Nova Compra Realizada!</b>\n\n"
             f"🪙 <b>Moeda comprada:</b> {symbol}\n"
             f"💵 <b>Valor investido nesta compra:</b> US$ {total_invested:,.2f}\n"
-            f"🏷️ <b>Preço de compra:</b> US$ {entry_price:,.4f}\n"
-            f"🎯 <b>Meta de venda:</b> US$ {tp_price:,.4f} (<b>+{tp_pct:.2f}%</b> 👉 lucro estimado de <b>+US$ {expected_profit:,.2f}</b>)\n"
-            f"🛡️ <b>Piso de proteção inicial:</b> US$ {sl_price:,.4f} (<b>{sl_pct:.2f}%</b>)\n"
+            f"🏷️ <b>Preço de compra:</b> US$ {self._format_price(entry_price)}\n"
+            f"🎯 <b>Meta de venda:</b> US$ {self._format_price(tp_price)} (<b>+{tp_pct:.2f}%</b> 👉 lucro estimado de <b>+US$ {expected_profit:,.2f}</b>)\n"
+            f"🛡️ <b>Piso de proteção inicial:</b> US$ {self._format_price(sl_price)} (<b>{sl_pct:.2f}%</b>)\n"
             f"{regime_block}\n"
             f"{why_block}"
             f"{portfolio_block}"
@@ -191,7 +202,8 @@ class TelegramNotifier:
         round_profit: float,
         invested_total: float,
         free_cash: float,
-        withdrawable_pool: float
+        withdrawable_pool: float,
+        show_before_after: bool = True
     ) -> str:
         if current_total <= 0 and prev_total <= 0:
             return ""
@@ -200,11 +212,16 @@ class TelegramNotifier:
             if round_profit > 0
             else ""
         )
+        history_lines = (
+            f"• 📊 <b>Patrimônio Anterior:</b> US$ {prev_total:,.2f}\n"
+            f"• 💰 <b>Patrimônio Atual:</b> US$ {current_total:,.2f}\n"
+            if show_before_after
+            else f"• 💰 <b>Patrimônio Total:</b> US$ {current_total:,.2f}\n"
+        )
         brl_est = withdrawable_pool * 5.80
         return (
             f"💼 <b>Resumo da sua Conta:</b>\n"
-            f"• 📊 <b>Patrimônio Anterior:</b> US$ {prev_total:,.2f}\n"
-            f"• 💰 <b>Patrimônio Atual:</b> US$ {current_total:,.2f}\n"
+            f"{history_lines}"
             f"{profit_line}"
             f"• 📈 <b>Total Operando nas Moedas:</b> US$ {invested_total:,.2f}\n"
             f"• 💵 <b>Caixa Livre p/ Compras:</b> US$ {free_cash:,.2f}\n"
@@ -242,8 +259,8 @@ class TelegramNotifier:
         msg = (
             f"{tag}{header}\n\n"
             f"🪙 <b>Moeda vendida:</b> {symbol}\n"
-            f"📥 <b>Preço de compra:</b> US$ {entry_price:,.4f}\n"
-            f"📤 <b>Preço de venda:</b> US$ {exit_price:,.4f}\n"
+            f"📥 <b>Preço de compra:</b> US$ {self._format_price(entry_price)}\n"
+            f"📤 <b>Preço de venda:</b> US$ {self._format_price(exit_price)}\n"
             f"{result_line}\n\n"
             f"{profit_block}"
             f"{portfolio_block}"
