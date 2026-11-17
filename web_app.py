@@ -31,12 +31,14 @@ sys.path.append(ENGINE_DIR)
 from database import Database
 from main import TradingEngine
 from notifier import TelegramNotifier
+from exchange import ExchangeClient
 from agents.risk import RiskAgent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s]: %(message)s")
 logger = logging.getLogger("cashbot.web")
 
 _CYCLE_LOCK = threading.Lock()
+_REGIME_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 DEFAULT_RENDER_URL = "https://cashbot-17wi.onrender.com"
 
 
@@ -210,9 +212,20 @@ class CashBotHandler(SimpleHTTPRequestHandler):
             return
         self._execute_route_safely(self._send_overview_payload, {})
 
+    def _get_cached_market_regime(self) -> Dict[str, Any]:
+        now = time.time()
+        if _REGIME_CACHE["data"] is not None and (now - float(_REGIME_CACHE["ts"])) < 60.0:
+            return _REGIME_CACHE["data"]
+        regime = ExchangeClient().assess_market_regime()
+        _REGIME_CACHE["ts"] = now
+        _REGIME_CACHE["data"] = regime
+        return regime
+
     def _send_overview_payload(self, _payload: Dict[str, Any]) -> None:
         db = Database()
-        self._send_json(db.get_dashboard_overview(trades_limit=50, consensus_limit=20))
+        overview = db.get_dashboard_overview(trades_limit=50, consensus_limit=20)
+        overview["market_regime"] = self._get_cached_market_regime()
+        self._send_json(overview)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)

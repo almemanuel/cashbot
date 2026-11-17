@@ -219,6 +219,37 @@ function renderData(data) {
   }
   document.getElementById('totalPortfolioUsd').innerText = `$${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+  const baseAllocated = 1000.0;
+  const netDiff = total - baseAllocated;
+  const netPct = (netDiff / baseAllocated) * 100.0;
+  const netEl = document.getElementById('netResultVsBase');
+  if (netEl) {
+    const sign = netDiff >= 0 ? '+' : '-';
+    netEl.innerText = `${sign}$${Math.abs(netDiff).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${sign}${Math.abs(netPct).toFixed(2)}%)`;
+    netEl.className = netDiff >= 0
+      ? 'text-sm font-extrabold text-emerald-400'
+      : 'text-sm font-extrabold text-rose-400';
+  }
+
+  const regimeEl = document.getElementById('botMarketRegime');
+  const regimeReasonEl = document.getElementById('botMarketRegimeReason');
+  if (regimeEl && data.market_regime) {
+    const reg = data.market_regime;
+    const pctLabel = Math.round(Number(reg.capital_pct || 0) * 100);
+    const modeMap = {
+      CRASH: { text: 'CRASH • Pausado (0%)', cls: 'text-sm font-extrabold text-rose-400' },
+      DEFENSIVO: { text: `DEFENSIVO • ${pctLabel}% caixa`, cls: 'text-sm font-extrabold text-amber-400' },
+      FAVORAVEL: { text: `FAVORÁVEL • ${pctLabel}% caixa`, cls: 'text-sm font-extrabold text-emerald-400' },
+    };
+    const cfg = modeMap[reg.regime] || { text: reg.regime || '--', cls: 'text-sm font-extrabold text-slate-200' };
+    regimeEl.innerText = cfg.text;
+    regimeEl.className = cfg.cls;
+    if (regimeReasonEl) {
+      regimeReasonEl.innerText = reg.reason || '';
+      regimeReasonEl.title = reg.reason || '';
+    }
+  }
+
   renderPortfolioChart(ledgerHistory, trades, openTrades, trading, withdrawable, investedUsd);
 
   // 2. Posições Abertas (Multi-Posição / Diversificação)
