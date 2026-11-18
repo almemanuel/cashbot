@@ -50,7 +50,7 @@ TIME_STOP_MAX_LOSS_PCT = 1.8
 # Taxa ida+volta. Padrão 0.15% = 0.075% por lado pagando taxas com BNB (desconto de 25%).
 ROUND_TRIP_FEE_RATE = float(os.getenv("ROUND_TRIP_FEE_RATE", "0.0015"))
 BREAKEVEN_TRIGGER = 1.0060
-BREAKEVEN_LOCK = 1.0015
+BREAKEVEN_LOCK = 1.0028
 CHECK_LOOKBACK_MINUTES = 16
 TECHNICAL_WEIGHT = 0.60
 SENTIMENT_WEIGHT = 0.40
@@ -692,11 +692,11 @@ class TradingEngine:
         return tech_score, sent_score, final_score, veto
 
     def _get_active_cooldowns(self) -> set:
-        loss_cooldown = self.db.get_symbols_in_loss_cooldown(minutes=180)
+        loss_cooldown = self.db.get_symbols_in_loss_cooldown(minutes=360)
         recent_cooldown = self.db.get_recently_closed_symbols(minutes=45)
         cooldown_symbols = loss_cooldown | recent_cooldown
         if cooldown_symbols:
-            logger.info(f"Ativos em Cooldown (3h perda / 45m pós-venda): {cooldown_symbols}")
+            logger.info(f"Ativos em Cooldown (6h perda / 45m pós-venda): {cooldown_symbols}")
         return cooldown_symbols
 
     def _filter_valid_candidates(
