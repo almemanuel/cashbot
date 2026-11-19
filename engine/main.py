@@ -408,8 +408,8 @@ class TradingEngine:
         if gain_now_pct >= be_trigger_pct or (gain_peak_pct >= (be_trigger_pct + 0.10) and gain_now_pct >= (be_trigger_pct - 0.10)):
             candidate = max(candidate, _round_price_dynamic(entry_price * BREAKEVEN_LOCK))
 
-        # 2) Subida de piso proporcional à força da tendência quando já acumula >= +1.15% no momento da execução
-        if gain_now_pct >= 1.15:
+        # 2) Subida de piso proporcional à força da tendência quando já acumula >= +1.35% no momento da execução
+        if gain_now_pct >= 1.35:
             lock_ratio = self._resolve_profit_lock_ratio(entry_price, current_price, recent_high, delib)
             locked_price = _round_price_dynamic(entry_price + (current_price - entry_price) * lock_ratio)
             candidate = max(candidate, locked_price)
@@ -427,12 +427,12 @@ class TradingEngine:
     ) -> float:
         pullback_from_peak_pct = ((recent_high - current_price) / entry_price) * 100.0
         if delib is None:
-            return 0.50
-        ind = delib.indicators
-        strong_now = ind.is_strong_uptrend and ind.is_above_vwap and ind.rsi14 < 68.0 and delib.final_score >= 60.0
-        if strong_now and pullback_from_peak_pct < 0.35:
             return 0.45
-        return 0.70
+        ind = delib.indicators
+        strong_now = ind.is_strong_uptrend and ind.is_above_vwap and ind.rsi14 < 76.0 and delib.final_score >= 60.0
+        if strong_now and pullback_from_peak_pct < 0.60:
+            return 0.45
+        return 0.55
 
     def _sync_protection_orders(self, open_trade: Dict[str, Any], stop_loss: float, take_profit: float) -> None:
         self.exchange.replace_protection_orders(
@@ -456,7 +456,7 @@ class TradingEngine:
         if delib is None or delib.veto or delib.final_score < 68.0:
             return False
         ind = delib.indicators
-        if not (ind.is_strong_uptrend and ind.is_above_vwap and ind.rsi14 < 68.0):
+        if not (ind.is_strong_uptrend and ind.is_above_vwap and ind.rsi14 < 76.0):
             return False
 
         new_tp = _round_price_dynamic(current_price * 1.008)
