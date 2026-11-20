@@ -424,7 +424,7 @@ class Database:
         return cur.fetchone() is not None
 
     def save_system_marker(self, marker_symbol: str, note: str) -> None:
-        """Grava um marcador de controle (como aviso de fim de dia ou reinício) no banco."""
+        """Grava um marcador de controle (como aviso de fim de dia, reinício ou regime) no banco."""
         self.save_consensus_log(
             symbol=marker_symbol,
             tech_score=100.0,
@@ -433,6 +433,16 @@ class Database:
             veto_applied=False,
             reasoning_summary=note,
         )
+
+    def get_last_system_marker_note(self, marker_symbol: str) -> str:
+        """Retorna a última nota gravada para um marcador de sistema (ex: SYSTEM/REGIME)."""
+        query = self._sql(
+            "SELECT reasoning_summary FROM consensus_logs WHERE symbol = ? ORDER BY id DESC LIMIT 1"
+        )
+        with self._session() as cur:
+            cur.execute(query, (marker_symbol,))
+            row = cur.fetchone()
+            return str(row[0]) if row and row[0] else ""
 
     def get_daily_summary_stats(self) -> Dict[str, Any]:
         """Consolida os números das últimas 24h em uma única sessão para o relatório das 22h BRT."""

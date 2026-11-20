@@ -315,6 +315,30 @@ class TelegramNotifier:
             f"• 🔄 <b>Reinvestido no Capital (10%):</b> +US$ {to_reinvest:,.2f}\n\n"
         )
 
+    def notify_regime_change(
+        self,
+        prev_regime: str,
+        new_regime: str,
+        reason: str,
+        is_simulated: bool = False
+    ) -> bool:
+        """Notifica no Telegram apenas quando há virada de cenário de mercado (ALTA / LATERAL / QUEDA)."""
+        tag = "🧪 <b>[TESTE SIMULADO]</b>\n" if is_simulated else ""
+        meta = {
+            "ALTA": ("🟢", "Cenário de ALTA Confirmada", "Robô liberado para comprar moedas em tendência de alta no 4h."),
+            "LATERAL": ("🟡", "Cenário LATERAL (Seletivo)", "Robô mantém dólar parado e só compra moedas que estiverem em alta própria confirmada."),
+            "QUEDA": ("🔴", "Cenário de QUEDA (Proteção Total)", "Trava ativada: zerando posições e mantendo 100% do capital protegido em dólar."),
+        }
+        icon, title, action_desc = meta.get(new_regime, ("🧭", f"Cenário: {new_regime}", "Monitorando tendência de 4h."))
+        prev_line = f"🔄 <b>Mudança:</b> {prev_regime} → <b>{new_regime}</b>\n" if prev_regime else ""
+        msg = (
+            f"{tag}{icon} <b>CashBot — {title}</b>\n\n"
+            f"{prev_line}"
+            f"📊 <b>Leitura (4h):</b> {html.escape(reason)}\n"
+            f"🧭 <b>Ação do Robô:</b> {action_desc}"
+        )
+        return self.send_message(msg)
+
     def notify_end_of_day_summary(
         self,
         stats: Dict[str, Any],

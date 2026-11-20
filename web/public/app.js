@@ -237,6 +237,9 @@ function renderData(data) {
     const reg = data.market_regime;
     const pctLabel = Math.round(Number(reg.capital_pct || 0) * 100);
     const modeMap = {
+      QUEDA: { text: 'QUEDA • 100% em Dólar', cls: 'text-sm font-extrabold text-rose-400' },
+      LATERAL: { text: 'LATERAL • Seleção 4h', cls: 'text-sm font-extrabold text-amber-400' },
+      ALTA: { text: 'ALTA • Tendência 4h', cls: 'text-sm font-extrabold text-emerald-400' },
       CRASH: { text: 'CRASH • Pausado (0%)', cls: 'text-sm font-extrabold text-rose-400' },
       DEFENSIVO: { text: `DEFENSIVO • ${pctLabel}% caixa`, cls: 'text-sm font-extrabold text-amber-400' },
       FAVORAVEL: { text: `FAVORÁVEL • ${pctLabel}% caixa`, cls: 'text-sm font-extrabold text-emerald-400' },

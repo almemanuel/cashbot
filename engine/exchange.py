@@ -188,42 +188,51 @@ class ExchangeClient:
             logger.warning(f"Falha ao consultar klines 15m em {base_url} para {clean_symbol}: {e}")
             return []
 
+    def fetch_4h_candles(self, symbol: str, limit: int = 120) -> List[Dict[str, float]]:
+        """Busca candles reais de 4h na Binance (base da estratégia T11)."""
+        clean_symbol = symbol.replace("/", "").upper()
+        for base_url in BINANCE_PUBLIC_ENDPOINTS:
+            candles = self._try_fetch_klines_interval(base_url, clean_symbol, "4h", limit)
+            if candles:
+                return candles
+        return []
+
     def assess_market_regime(self) -> dict:
         """
-        Avalia o regime atual do mercado via Bitcoin (15m):
-        - CRASH: queda aguda intradiária -> pausa compras (0% capital).
-        - DEFENSIVO: BTC abaixo da EMA50/EMA200 ou RSI < 45 -> entradas pontuais (35% capital, score >= 74).
-        - FAVORAVEL: BTC saudável acima das médias -> alocação normal (70% capital, score >= 66).
+        Avalia o regime do mercado via Bitcoin no gráfico de 4h (Estratégia T11):
+        - QUEDA: BTC > 4% abaixo da EMA50 (4h) -> trava geral, 100% em dólar.
+        - ALTA: BTC > EMA50, EMA20 > EMA50 e EMA50 subindo > 1% em 3 dias -> tendência forte.
+        - LATERAL: mercado sem queda forte -> libera compras apenas para moedas em alta própria confirmada.
         """
         try:
-            candles = self._fetch_binance_klines("BTC/USDT", limit=210)
-            if len(candles) < 50:
-                return self._build_regime("FAVORAVEL", 0.70, 66.0, "Dados insuficientes de BTC; mantendo padrão.")
+            candles = self.fetch_4h_candles("BTC/USDT", limit=120)
+            if len(candles) < 70:
+                return self._build_regime("LATERAL", 1.0, 70.0, "Dados insuficientes de BTC 4h; seleção individual ativa.")
             return self._classify_btc_candles(candles)
         except Exception as e:
-            logger.warning(f"Não foi possível avaliar regime do BTC: {e}")
-            return self._build_regime("FAVORAVEL", 0.70, 66.0, "Falha na leitura do BTC; mantendo padrão.")
+            logger.warning(f"Não foi possível avaliar regime do BTC 4h: {e}")
+            return self._build_regime("LATERAL", 1.0, 70.0, "Falha na leitura do BTC 4h; seleção individual ativa.")
 
     def _classify_btc_candles(self, candles: List[dict]) -> dict:
         closes = [c["close"] for c in candles]
         current = closes[-1]
         ema20 = calculate_ema(closes, 20)[-1]
-        ema50 = calculate_ema(closes, 50)[-1]
-        ema200 = calculate_ema(closes, 200)[-1] if len(closes) >= 200 else ema50
-        rsi14 = calculate_rsi(closes, 14)
-        mom_1h = ((current - closes[-5]) / closes[-5]) * 100.0 if len(closes) >= 5 else 0.0
-        mom_30m = ((current - closes[-3]) / closes[-3]) * 100.0 if len(closes) >= 3 else 0.0
+        ema50_series = calculate_ema(closes, 50)
+        ema50 = ema50_series[-1]
+        ema50_3d = ema50_series[-19] if len(ema50_series) >= 19 else ema50
+        dist_ema50 = ((current - ema50) / ema50) * 100.0 if ema50 > 0 else 0.0
+        slope_3d = ((ema50 - ema50_3d) / ema50_3d) * 100.0 if ema50_3d > 0 else 0.0
 
-        if (mom_1h < -0.75 and current < ema20 and rsi14 < 42.0) or (mom_30m < -0.60 and current < ema20):
-            reason = f"BTC em queda rápida (1h: {mom_1h:+.2f}%, 30m: {mom_30m:+.2f}%, RSI: {rsi14:.1f})"
-            return self._build_regime("CRASH", 0.0, 100.0, reason)
+        if current < ema50 * 0.96:
+            reason = f"BTC em queda forte no 4h ({dist_ema50:+.2f}% da EMA50) — trava ativa, 100% em dólar"
+            return self._build_regime("QUEDA", 0.0, 100.0, reason)
 
-        if current < ema50 or current < ema200 or rsi14 < 50.0 or mom_1h <= 0.0:
-            reason = f"Mercado desfavorável (BTC abaixo das EMAs/RSI {rsi14:.1f}, 1h: {mom_1h:+.2f}%) — operação pontual com 35% do caixa"
-            return self._build_regime("DEFENSIVO", 0.35, 74.0, reason)
+        if current > ema50 and ema20 > ema50 and ema50 > ema50_3d * 1.01:
+            reason = f"BTC em alta confirmada no 4h ({dist_ema50:+.2f}% da EMA50, EMA50 3d: {slope_3d:+.2f}%)"
+            return self._build_regime("ALTA", 1.0, 70.0, reason)
 
-        reason = f"Mercado favorável (BTC acima das EMAs, RSI {rsi14:.1f}, 1h: {mom_1h:+.2f}%)"
-        return self._build_regime("FAVORAVEL", 0.70, 66.0, reason)
+        reason = f"BTC lateral no 4h ({dist_ema50:+.2f}% da EMA50) — comprando apenas moedas em alta própria"
+        return self._build_regime("LATERAL", 1.0, 70.0, reason)
 
     def _build_regime(self, regime: str, capital_pct: float, min_score: float, reason: str) -> dict:
         return {
@@ -234,9 +243,9 @@ class ExchangeClient:
         }
 
     def is_btc_flash_crashing(self) -> Tuple[bool, str]:
-        """Mantido por compatibilidade: verifica se o regime atual é CRASH."""
+        """Mantido por compatibilidade: verifica se o regime atual é QUEDA."""
         assessment = self.assess_market_regime()
-        if assessment["regime"] == "CRASH":
+        if assessment["regime"] == "QUEDA":
             return True, assessment["reason"]
         return False, ""
 

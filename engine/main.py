@@ -22,8 +22,13 @@ from database import Database
 from exchange import ExchangeClient
 from agents.technical import TechnicalAgent
 from agents.sentiment import SentimentAgent
-from agents.risk import RiskAgent
+from agents.risk import RiskAgent, calculate_ema
 from notifier import TelegramNotifier
+
+T11_UNIVERSE = [
+    "SOL/USDT", "NEAR/USDT", "XRP/USDT", "ZEC/USDT", "BNB/USDT",
+    "UNI/USDT", "DOGE/USDT", "ETH/USDT", "SUI/USDT",
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,12 +80,15 @@ class TradingEngine:
         self.exchange = ExchangeClient(simulation_mode=force_simulation)
 
     def run_cycle(self, force_opportunity: bool = False, bypass_cooldown: bool = False) -> None:
-        """Executa um ciclo completo de Day Trade Quantitativo (15m) com IA sempre ativa."""
-        logger.info("=== INICIANDO CICLO DAY TRADE QUANTITATIVO (15M) ===")
-        if self._handle_withdraw_pause_window(force_opportunity):
-            return
-
-        self._handle_daily_restart_if_due()
+        """
+        Executa um ciclo da Estratégia T11 (Tendência 4h por Moeda + Trava de Queda do BTC, sem IA):
+        - Avalia o regime do BTC no 4h (ALTA / LATERAL / QUEDA) e notifica apenas na virada de cenário.
+        - Em QUEDA (BTC < EMA50 * 0.96): zera posições e mantém 100% em dólar.
+        - Em ALTA ou LATERAL: checa moeda por moeda (universo de 9 moedas líquidas), aloca ~1/9 em cada
+          moeda com tendência confirmada (close > EMA50, EMA20 > EMA50, EMA50 subindo > 1% em 3d)
+          e segura enquanto close > EMA50 * 0.99 e EMA20 > EMA50.
+        """
+        logger.info("=== INICIANDO CICLO QUANTITATIVO T11 (TENDÊNCIA 4H SEM IA) ===")
         if self._is_duplicate_scheduled_cycle(force_opportunity, bypass_cooldown):
             return
 
@@ -90,29 +98,197 @@ class TradingEngine:
             f"Pool para Saque: ${ledger['withdrawable_pool']:,.2f}"
         )
 
-        open_trades = self.db.get_open_trades()
-        deliberations = self._evaluate_watchlist(force_opportunity, open_trades)
-        self.db.save_consensus_logs_batch([d.to_dict() for d in deliberations])
+        regime = self.exchange.assess_market_regime()
+        btc_regime = str(regime["regime"])
+        logger.info(f"📊 Regime T11 (BTC 4h): {btc_regime} | {regime['reason']}")
+        self._notify_regime_change_if_needed(btc_regime, str(regime["reason"]))
 
-        self._check_all_open_trades(open_trades, deliberations)
+        assessments = self._evaluate_t11_universe()
+        self._save_t11_consensus_snapshot(assessments)
+
+        open_trades = self.db.get_open_trades()
+        self._manage_t11_open_trades(open_trades, assessments, btc_regime)
 
         remaining_open = self.db.get_open_trades()
         updated_ledger = self._reconcile_exchange_cash_flow(self.db.get_ledger(), remaining_open)
-        free_capital = self._compute_free_capital(updated_ledger, remaining_open)
+        self._open_t11_positions(assessments, remaining_open, updated_ledger, btc_regime, str(regime["reason"]))
 
-        if len(remaining_open) >= MAX_OPEN_SLOTS or free_capital < 12.0:
-            if self._try_rotate_stagnant_position(remaining_open, deliberations, updated_ledger):
-                remaining_open = self.db.get_open_trades()
-                updated_ledger = self.db.get_ledger()
-                free_capital = self._compute_free_capital(updated_ledger, remaining_open)
-            else:
-                logger.info(
-                    f"Carteira com {len(remaining_open)}/{MAX_OPEN_SLOTS} posições ativas e "
-                    f"${free_capital:,.2f} livre. Comitê de IA registrado e posições monitoradas."
-                )
-                return
+    def _notify_regime_change_if_needed(self, current_regime: str, reason: str) -> None:
+        prev_regime = self.db.get_last_system_marker_note("SYSTEM/REGIME")
+        if prev_regime == current_regime:
+            return
+        self.db.save_system_marker("SYSTEM/REGIME", current_regime)
+        self.notifier.notify_regime_change(
+            prev_regime=prev_regime,
+            new_regime=current_regime,
+            reason=reason,
+            is_simulated=self.exchange.simulation_mode,
+        )
 
-        self._decide_and_execute(deliberations, updated_ledger, remaining_open, notify_wait=bypass_cooldown)
+    def _evaluate_t11_universe(self) -> Dict[str, Dict[str, Any]]:
+        results: Dict[str, Dict[str, Any]] = {}
+        for symbol in T11_UNIVERSE:
+            results[symbol] = self._evaluate_single_t11_coin(symbol)
+        return results
+
+    def _evaluate_single_t11_coin(self, symbol: str) -> Dict[str, Any]:
+        candles = self.exchange.fetch_4h_candles(symbol, limit=120)
+        if len(candles) < 70:
+            return self._build_t11_eval(symbol, 0.0, 0.0, 0.0, False, False, 0.0, "Dados 4h insuficientes.")
+        closes = [c["close"] for c in candles]
+        price = closes[-1]
+        ema20 = calculate_ema(closes, 20)[-1]
+        ema50_series = calculate_ema(closes, 50)
+        ema50 = ema50_series[-1]
+        ema50_3d = ema50_series[-19] if len(ema50_series) >= 19 else ema50
+
+        entry_ok = price > ema50 and ema20 > ema50 and ema50 > ema50_3d * 1.01
+        hold_ok = price > ema50 * 0.99 and ema20 > ema50
+        slope_pct = ((ema50 - ema50_3d) / ema50_3d) * 100.0 if ema50_3d > 0 else 0.0
+        dist_pct = ((price - ema50) / ema50) * 100.0 if ema50 > 0 else 0.0
+        score = min(100.0, max(0.0, 50.0 + dist_pct * 5.0 + slope_pct * 10.0))
+        status_txt = "Tendência 4h confirmada (Compra)" if entry_ok else ("Tendência 4h ativa (Segurar)" if hold_ok else "Sem tendência de alta no 4h")
+        reason = f"{status_txt} | Preço vs EMA50: {dist_pct:+.2f}% | EMA50 3d: {slope_pct:+.2f}%"
+        return self._build_t11_eval(symbol, price, ema20, ema50, entry_ok, hold_ok, round(score, 2), reason)
+
+    @staticmethod
+    def _build_t11_eval(
+        symbol: str,
+        price: float,
+        ema20: float,
+        ema50: float,
+        entry_ok: bool,
+        hold_ok: bool,
+        score: float,
+        reason: str
+    ) -> Dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "price": price,
+            "ema20": ema20,
+            "ema50": ema50,
+            "entry_confirmed": entry_ok,
+            "hold_valid": hold_ok,
+            "score": score,
+            "reason": reason,
+        }
+
+    def _save_t11_consensus_snapshot(self, assessments: Dict[str, Dict[str, Any]]) -> None:
+        items = [
+            {
+                "symbol": a["symbol"],
+                "technical_score": a["score"],
+                "sentiment_score": 50.0,
+                "final_score": a["score"],
+                "veto": not a["hold_valid"],
+                "reasoning_summary": a["reason"],
+            }
+            for a in assessments.values()
+        ]
+        self.db.save_consensus_logs_batch(items)
+
+    def _manage_t11_open_trades(
+        self,
+        open_trades: List[Dict[str, Any]],
+        assessments: Dict[str, Dict[str, Any]],
+        btc_regime: str
+    ) -> None:
+        for trade in open_trades:
+            self._manage_single_t11_trade(trade, assessments, btc_regime)
+
+    def _manage_single_t11_trade(
+        self,
+        trade: Dict[str, Any],
+        assessments: Dict[str, Dict[str, Any]],
+        btc_regime: str
+    ) -> None:
+        symbol = str(trade["symbol"])
+        info = assessments.get(symbol)
+        exit_price = info["price"] if (info and info["price"] > 0) else self.exchange.fetch_current_price(symbol, float(trade["entry_price"]))
+        if btc_regime == "QUEDA":
+            ledger = self.db.get_ledger()
+            status = "CLOSED_TP" if exit_price >= float(trade["entry_price"]) else "CLOSED_SL"
+            self._settle_closed_position(trade, status, exit_price, ledger, outcome_reason="BTC_QUEDA_4H")
+            return
+
+        if info and not info["hold_valid"]:
+            ledger = self.db.get_ledger()
+            status = "CLOSED_TP" if exit_price >= float(trade["entry_price"]) else "CLOSED_SL"
+            self._settle_closed_position(trade, status, exit_price, ledger, outcome_reason="TREND_4H_EXIT")
+            return
+
+        if info and info["ema50"] > 0:
+            new_floor = _round_price_dynamic(info["ema50"] * 0.99)
+            self.db.update_trade_stop_loss(int(trade["id"]), new_floor)
+
+    def _open_t11_positions(
+        self,
+        assessments: Dict[str, Dict[str, Any]],
+        open_trades: List[Dict[str, Any]],
+        ledger: Dict[str, float],
+        btc_regime: str,
+        regime_reason: str
+    ) -> None:
+        if btc_regime == "QUEDA":
+            logger.info("🛡️ Cenário QUEDA no BTC 4h: nenhuma compra aberta. Capital 100% em dólar.")
+            return
+
+        open_symbols = {str(t["symbol"]) for t in open_trades}
+        locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
+        free_cash = max(0.0, float(ledger["trading_balance"]) - locked_usd)
+        slot_target = round(float(ledger["trading_balance"]) / len(T11_UNIVERSE), 2)
+
+        for symbol in T11_UNIVERSE:
+            info = assessments.get(symbol)
+            if not info or not info["entry_confirmed"] or symbol in open_symbols:
+                continue
+            alloc_usd = min(free_cash, slot_target)
+            if alloc_usd < 10.0:
+                continue
+            self._execute_t11_buy(info, alloc_usd, regime_reason)
+            free_cash = max(0.0, free_cash - alloc_usd)
+
+    def _execute_t11_buy(self, info: Dict[str, Any], alloc_usd: float, regime_reason: str) -> None:
+        symbol = info["symbol"]
+        entry_price = float(info["price"])
+        stop_loss = _round_price_dynamic(float(info["ema50"]) * 0.99)
+        take_profit = _round_price_dynamic(entry_price * 1.25)
+        qty = self.risk_agent.calculate_position_size(alloc_usd, entry_price, 0.0)
+        if qty <= 0:
+            return
+
+        order_res = self.exchange.create_market_buy_and_oco(symbol, qty, stop_loss, take_profit)
+        self.db.save_trade(
+            symbol=symbol,
+            entry_price=entry_price,
+            qty=qty,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            binance_order_list_id=order_res.get("order_list_id"),
+            status="OPEN_OCO",
+        )
+        cur_ledger = self.db.get_ledger()
+        all_open = self.db.get_open_trades()
+        invested_usd = round(sum(float(t["entry_price"]) * float(t["quantity"]) for t in all_open), 2)
+        free_cash = max(0.0, round(float(cur_ledger["trading_balance"]) - invested_usd, 2))
+        total_portfolio = round(float(cur_ledger["trading_balance"]) + float(cur_ledger["withdrawable_pool"]), 2)
+
+        self.notifier.notify_order_placed(
+            symbol=symbol,
+            entry_price=entry_price,
+            qty=qty,
+            sl_price=stop_loss,
+            tp_price=take_profit,
+            is_simulated=self.exchange.simulation_mode,
+            tech_reason=info["reason"],
+            sent_reason="Estratégia T11 (Tendência 4h pura, sem IA).",
+            prev_portfolio_total=total_portfolio,
+            current_portfolio_total=total_portfolio,
+            invested_total=invested_usd,
+            free_cash=free_cash,
+            withdrawable_pool=float(cur_ledger["withdrawable_pool"]),
+            regime_note=regime_reason,
+        )
 
     def _is_duplicate_scheduled_cycle(self, force_opportunity: bool, bypass_cooldown: bool) -> bool:
         if force_opportunity or bypass_cooldown:
