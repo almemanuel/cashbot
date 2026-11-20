@@ -721,6 +721,10 @@ class TradingEngine:
         open_trades: List[Dict[str, Any]],
         notify_wait: bool = False
     ) -> None:
+        if os.environ.get("NEW_BUYS_ENABLED", "false").strip().lower() != "true":
+            logger.warning("⏸️ Novas compras PAUSADAS (NEW_BUYS_ENABLED != true). Caixa mantido em USD; posições abertas seguem gerenciadas.")
+            return
+
         regime = self.exchange.assess_market_regime()
         logger.info(
             f"📊 Regime de Mercado: {regime['regime']} | {regime['reason']} "
