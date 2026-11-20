@@ -90,6 +90,36 @@ class ExchangeClient:
             logger.warning(f"Não foi possível ler saldo USDT na Binance, usando ledger local: {e}")
             return fallback_balance
 
+    def discover_top_liquid_pairs(
+        self,
+        max_pairs: int = 20,
+        min_volume_usd: float = 50_000_000.0
+    ) -> List[str]:
+        """
+        Varre todo o mercado Spot da Binance (/ticker/24hr) e retorna os pares /USDT
+        de maior liquidez real (excluindo stablecoins, tokens sintéticos e o próprio BTC).
+        """
+        tickers = self._fetch_24h_tickers()
+        if not tickers:
+            return []
+
+        liquid = [t for t in tickers if self._is_top_liquid_ticker(t, min_volume_usd)]
+        ranked = sorted(liquid, key=lambda t: float(t.get("quoteVolume", 0.0)), reverse=True)
+        selected = [self._to_slash_symbol(t["symbol"]) for t in ranked[:max_pairs]]
+        logger.info(f"Scanner T11 ({len(selected)} moedas mais líquidas da Binance): {selected}")
+        return selected
+
+    def _is_top_liquid_ticker(self, ticker: Dict[str, Any], min_volume_usd: float) -> bool:
+        raw_symbol = str(ticker.get("symbol", ""))
+        if not raw_symbol.endswith("USDT"):
+            return False
+        base = raw_symbol[:-4]
+        if base == "BTC" or base == "U" or "USD" in base:
+            return False
+        if base != "ETH" and not self._is_valid_base_asset(base):
+            return False
+        return float(ticker.get("quoteVolume", 0.0)) >= min_volume_usd
+
     def discover_dynamic_watchlist(self, max_pairs: int = 6) -> List[str]:
         """
         Varre todo o mercado Spot da Binance em 1 única requisição (/api/v3/ticker/24hr)

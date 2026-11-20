@@ -29,6 +29,9 @@ T11_UNIVERSE = [
     "SOL/USDT", "NEAR/USDT", "XRP/USDT", "ZEC/USDT", "BNB/USDT",
     "UNI/USDT", "DOGE/USDT", "ETH/USDT", "SUI/USDT",
 ]
+T11_MAX_SLOTS = 9
+T11_SCAN_TOP_LIQUID = 20
+T11_MIN_VOLUME_USD = 15_000_000.0
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,15 +106,30 @@ class TradingEngine:
         logger.info(f"📊 Regime T11 (BTC 4h): {btc_regime} | {regime['reason']}")
         self._notify_regime_change_if_needed(btc_regime, str(regime["reason"]))
 
-        assessments = self._evaluate_t11_universe()
+        open_trades = self.db.get_open_trades()
+        universe = self._resolve_t11_universe(open_trades)
+        assessments = self._evaluate_t11_universe(universe)
         self._save_t11_consensus_snapshot(assessments)
 
-        open_trades = self.db.get_open_trades()
         self._manage_t11_open_trades(open_trades, assessments, btc_regime)
 
         remaining_open = self.db.get_open_trades()
         updated_ledger = self._reconcile_exchange_cash_flow(self.db.get_ledger(), remaining_open)
         self._open_t11_positions(assessments, remaining_open, updated_ledger, btc_regime, str(regime["reason"]))
+
+    def _resolve_t11_universe(self, open_trades: List[Dict[str, Any]]) -> List[str]:
+        discovered = self.exchange.discover_top_liquid_pairs(
+            max_pairs=T11_SCAN_TOP_LIQUID,
+            min_volume_usd=T11_MIN_VOLUME_USD,
+        )
+        base_list = discovered if discovered else list(T11_UNIVERSE)
+        seen = set(base_list)
+        for trade in open_trades:
+            sym = str(trade["symbol"])
+            if sym not in seen:
+                base_list.append(sym)
+                seen.add(sym)
+        return base_list
 
     def _notify_regime_change_if_needed(self, current_regime: str, reason: str) -> None:
         prev_regime = self.db.get_last_system_marker_note("SYSTEM/REGIME")
@@ -125,9 +143,9 @@ class TradingEngine:
             is_simulated=self.exchange.simulation_mode,
         )
 
-    def _evaluate_t11_universe(self) -> Dict[str, Dict[str, Any]]:
+    def _evaluate_t11_universe(self, universe: List[str]) -> Dict[str, Dict[str, Any]]:
         results: Dict[str, Dict[str, Any]] = {}
-        for symbol in T11_UNIVERSE:
+        for symbol in universe:
             results[symbol] = self._evaluate_single_t11_coin(symbol)
         return results
 
@@ -234,14 +252,21 @@ class TradingEngine:
             return
 
         open_symbols = {str(t["symbol"]) for t in open_trades}
+        available_slots = max(0, T11_MAX_SLOTS - len(open_symbols))
+        if available_slots <= 0:
+            return
+
         locked_usd = sum(float(t["entry_price"]) * float(t["quantity"]) for t in open_trades)
         free_cash = max(0.0, float(ledger["trading_balance"]) - locked_usd)
-        slot_target = round(float(ledger["trading_balance"]) / len(T11_UNIVERSE), 2)
+        slot_target = round(float(ledger["trading_balance"]) / T11_MAX_SLOTS, 2)
 
-        for symbol in T11_UNIVERSE:
-            info = assessments.get(symbol)
-            if not info or not info["entry_confirmed"] or symbol in open_symbols:
-                continue
+        candidates = [
+            info for sym, info in assessments.items()
+            if info["entry_confirmed"] and sym not in open_symbols
+        ]
+        ranked = sorted(candidates, key=lambda item: float(item["score"]), reverse=True)[:available_slots]
+
+        for info in ranked:
             alloc_usd = min(free_cash, slot_target)
             if alloc_usd < 10.0:
                 continue
