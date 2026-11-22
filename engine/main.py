@@ -195,8 +195,8 @@ class TradingEngine:
         items = [
             {
                 "symbol": a["symbol"],
-                "technical_score": a["score"],
-                "sentiment_score": 50.0,
+                "tech_score": a["score"],
+                "sent_score": 50.0,
                 "final_score": a["score"],
                 "veto": not a["hold_valid"],
                 "reasoning_summary": a["reason"],
