@@ -44,20 +44,19 @@ DEFAULT_RENDER_URL = "https://cashbot-17wi.onrender.com"
 
 class BackgroundScheduler:
     """
-    Agendador Nativo 24/7 em Background (15 em 15 minutos cravados + Auto Keep-Alive no Render).
-    Garante execução pontual mesmo quando o cron do GitHub Actions atrasa.
+    Agendador Nativo 24/7 em Background (ciclo de 4h sincronizado à estratégia T11 + Auto Keep-Alive no Render).
     """
 
-    def __init__(self, interval_seconds: int = 900, keepalive_seconds: int = 45):
+    def __init__(self, interval_seconds: int = 14400, keepalive_seconds: int = 45):
         self.interval_seconds = interval_seconds
         self.keepalive_seconds = keepalive_seconds
         self.last_cycle_ts = 0.0
         self.last_ping_ts = 0.0
 
     def start(self) -> None:
-        thread = threading.Thread(target=self._run_loop, daemon=True, name="cashbot-15m-scheduler")
+        thread = threading.Thread(target=self._run_loop, daemon=True, name="cashbot-4h-scheduler")
         thread.start()
-        logger.info("Agendador nativo 15m + Auto Keep-Alive (45s) iniciado em background.")
+        logger.info("Agendador nativo 4h (T11) + Auto Keep-Alive (45s) iniciado em background.")
 
     def _run_loop(self) -> None:
         time.sleep(10)
@@ -85,10 +84,10 @@ class BackgroundScheduler:
             return
         try:
             self.last_cycle_ts = time.time()
-            logger.info("[SCHEDULER 15M] Disparando ciclo pontual de Day Trade em background...")
+            logger.info("[SCHEDULER 4H] Disparando ciclo T11 (Tendência 4h) em background...")
             TradingEngine().run_cycle(force_opportunity=False, bypass_cooldown=False)
         except Exception as e:
-            logger.error(f"[SCHEDULER 15M] Erro durante ciclo automático: {e}")
+            logger.error(f"[SCHEDULER 4H] Erro durante ciclo automático: {e}")
         finally:
             _CYCLE_LOCK.release()
 

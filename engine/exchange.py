@@ -244,7 +244,9 @@ class ExchangeClient:
             return self._build_regime("LATERAL", 1.0, 70.0, "Falha na leitura do BTC 4h; seleção individual ativa.")
 
     def _classify_btc_candles(self, candles: List[dict]) -> dict:
-        closes = [c["close"] for c in candles]
+        # Usa apenas candles de 4h já fechados (descarta o último candle em formação para evitar pisca-pisca)
+        closed_candles = candles[:-1] if len(candles) > 55 else candles
+        closes = [c["close"] for c in closed_candles]
         current = closes[-1]
         ema20 = calculate_ema(closes, 20)[-1]
         ema50_series = calculate_ema(closes, 50)
