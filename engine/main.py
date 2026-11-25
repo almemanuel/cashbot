@@ -161,12 +161,22 @@ class TradingEngine:
         ema50 = ema50_series[-1]
         ema50_3d = ema50_series[-19] if len(ema50_series) >= 19 else ema50
 
-        entry_ok = signal_price > ema50 and ema20 > ema50 and ema50 > ema50_3d * 1.01
+        entry_ok = (
+            signal_price > ema50
+            and signal_price <= ema50 * 1.06
+            and ema20 > ema50
+            and ema50 > ema50_3d * 1.01
+        )
         hold_ok = signal_price > ema50 * 0.99 and ema20 > ema50
         slope_pct = ((ema50 - ema50_3d) / ema50_3d) * 100.0 if ema50_3d > 0 else 0.0
         dist_pct = ((signal_price - ema50) / ema50) * 100.0 if ema50 > 0 else 0.0
         score = min(100.0, max(0.0, 50.0 + dist_pct * 5.0 + slope_pct * 10.0))
-        status_txt = "Tendência 4h confirmada (Compra)" if entry_ok else ("Tendência 4h ativa (Segurar)" if hold_ok else "Sem tendência de alta no 4h")
+        stretched = signal_price > ema50 * 1.06 and ema20 > ema50 and ema50 > ema50_3d * 1.01
+        status_txt = (
+            "Tendência 4h confirmada (Compra)" if entry_ok
+            else ("Esticada acima de +6% da EMA50 (Aguardar recuo)" if stretched
+                  else ("Tendência 4h ativa (Segurar)" if hold_ok else "Sem tendência de alta no 4h"))
+        )
         reason = f"{status_txt} | Fechamento 4h vs EMA50: {dist_pct:+.2f}% | EMA50 3d: {slope_pct:+.2f}%"
         return self._build_t11_eval(symbol, live_price, ema20, ema50, entry_ok, hold_ok, round(score, 2), reason)
 
