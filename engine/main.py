@@ -22,7 +22,7 @@ from database import Database
 from exchange import ExchangeClient
 from agents.technical import TechnicalAgent
 from agents.sentiment import SentimentAgent
-from agents.risk import RiskAgent, calculate_ema
+from agents.risk import RiskAgent, calculate_ema, calculate_atr
 from notifier import TelegramNotifier
 
 T11_UNIVERSE = [
@@ -32,6 +32,8 @@ T11_UNIVERSE = [
 T11_MAX_SLOTS = 9
 T11_SCAN_TOP_LIQUID = 20
 T11_MIN_VOLUME_USD = 15_000_000.0
+T11_CALM_ATR4H_PCT = 3.0
+T11_MIN_SAFETY_WEIGHT = 0.45
 
 logging.basicConfig(
     level=logging.INFO,
@@ -152,14 +154,20 @@ class TradingEngine:
     def _evaluate_single_t11_coin(self, symbol: str) -> Dict[str, Any]:
         candles = self.exchange.fetch_4h_candles(symbol, limit=120)
         if len(candles) < 70:
-            return self._build_t11_eval(symbol, 0.0, 0.0, 0.0, False, False, 0.0, "Dados 4h insuficientes.")
+            return self._build_t11_eval(symbol, 0.0, 0.0, 0.0, False, False, 0.0, "Dados 4h insuficientes.", 1.0)
         live_price = float(candles[-1]["close"])
-        closed_closes = [c["close"] for c in candles[:-1]]
+        closed_candles = candles[:-1]
+        closed_closes = [c["close"] for c in closed_candles]
         signal_price = closed_closes[-1]
         ema20 = calculate_ema(closed_closes, 20)[-1]
         ema50_series = calculate_ema(closed_closes, 50)
         ema50 = ema50_series[-1]
         ema50_3d = ema50_series[-19] if len(ema50_series) >= 19 else ema50
+        atr_4h = calculate_atr(closed_candles, 14)
+        atr_pct = (atr_4h / signal_price) * 100.0 if signal_price > 0 else T11_CALM_ATR4H_PCT
+        safety_weight = 1.0 if atr_pct <= T11_CALM_ATR4H_PCT else max(
+            T11_MIN_SAFETY_WEIGHT, round(T11_CALM_ATR4H_PCT / atr_pct, 2)
+        )
 
         entry_ok = (
             signal_price > ema50
@@ -177,8 +185,13 @@ class TradingEngine:
             else ("Esticada acima de +6% da EMA50 (Aguardar recuo)" if stretched
                   else ("Tendência 4h ativa (Segurar)" if hold_ok else "Sem tendência de alta no 4h"))
         )
-        reason = f"{status_txt} | Fechamento 4h vs EMA50: {dist_pct:+.2f}% | EMA50 3d: {slope_pct:+.2f}%"
-        return self._build_t11_eval(symbol, live_price, ema20, ema50, entry_ok, hold_ok, round(score, 2), reason)
+        reason = (
+            f"{status_txt} | Fechamento 4h vs EMA50: {dist_pct:+.2f}% | "
+            f"EMA50 3d: {slope_pct:+.2f}% | ATR 4h: {atr_pct:.2f}% (peso {int(safety_weight * 100)}%)"
+        )
+        return self._build_t11_eval(
+            symbol, live_price, ema20, ema50, entry_ok, hold_ok, round(score, 2), reason, safety_weight
+        )
 
     @staticmethod
     def _build_t11_eval(
@@ -189,7 +202,8 @@ class TradingEngine:
         entry_ok: bool,
         hold_ok: bool,
         score: float,
-        reason: str
+        reason: str,
+        safety_weight: float = 1.0
     ) -> Dict[str, Any]:
         return {
             "symbol": symbol,
@@ -200,6 +214,7 @@ class TradingEngine:
             "hold_valid": hold_ok,
             "score": score,
             "reason": reason,
+            "safety_weight": safety_weight,
         }
 
     def _save_t11_consensus_snapshot(self, assessments: Dict[str, Dict[str, Any]]) -> None:
@@ -275,10 +290,15 @@ class TradingEngine:
             info for sym, info in assessments.items()
             if info["entry_confirmed"] and sym not in open_symbols
         ]
-        ranked = sorted(candidates, key=lambda item: float(item["score"]), reverse=True)[:available_slots]
+        ranked = sorted(
+            candidates,
+            key=lambda item: float(item["score"]) * float(item.get("safety_weight", 1.0)),
+            reverse=True,
+        )[:available_slots]
 
         for info in ranked:
-            alloc_usd = min(free_cash, slot_target)
+            weighted_slot = round(slot_target * float(info.get("safety_weight", 1.0)), 2)
+            alloc_usd = min(free_cash, weighted_slot)
             if alloc_usd < 10.0:
                 continue
             self._execute_t11_buy(info, alloc_usd, regime_reason)
